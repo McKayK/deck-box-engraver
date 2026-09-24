@@ -37,6 +37,9 @@ build.mjs            esbuild bundle + inlining into docs/index.html
 assets/              The deck box model (STL)
 samples/             SVGs preloaded on first open
 docs/index.html      Built output (committed so GitHub Pages can serve it)
+Dockerfile           Two-stage build: node builds the page, nginx serves it
+nginx.conf           Container's nginx config (gzip, no-cache)
+docker-compose.yml   Runs the container on port 8090
 ```
 
 ## How it works
@@ -50,7 +53,33 @@ docs/index.html      Built output (committed so GitHub Pages can serve it)
 
 Face positions are hard-coded in the `FACES` table at the top of `src/main.js`, in the box's own coordinates (lying on its back, front = +z, top = −y). Each face has an outward normal `N`, an art "up" vector `U`, its center `c`, its size `w × h`, wall thickness, and any thin strips. To use a different box model, replace the STL in `assets/` and update that table.
 
+## Hosting with Docker
+
+The image builds the app, then serves the single HTML file with nginx (gzip on, about 2 MB down to under 1 MB over the wire). No Node at runtime.
+
+```bash
+docker compose up -d --build     # serves on http://<server>:8090
+```
+
+After changing the code or SVG samples, run the same command again to rebuild and restart.
+
+Behind an existing Nginx reverse proxy, add a server block pointing at the container:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name engraver.example.com;
+    # ssl_certificate / ssl_certificate_key: same as your other sites
+
+    location / {
+        proxy_pass http://127.0.0.1:8090;
+        proxy_set_header Host $host;
+    }
+}
+```
+
+If the proxy itself runs in Docker on a shared network, drop the `ports:` mapping in `docker-compose.yml`, join that network, and use `proxy_pass http://deck-box-engraver:80;` instead.
+
 ## Hosting on GitHub Pages
 
 Push the repo, then go to **Settings → Pages → Build and deployment**, choose *Deploy from a branch*, select `main` and the `/docs` folder. The tool will be live at `https://<username>.github.io/<repo>/`.
-# deck-box-engraver

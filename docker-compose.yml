@@ -1,0 +1,8 @@
+services:
+  deck-box-engraver:
+    build: .
+    image: deck-box-engraver
+    container_name: deck-box-engraver
+    restart: unless-stopped
+    ports:
+      - "8090:80"   # host:container. Change 8090 if that port is taken.
