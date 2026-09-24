@@ -1,0 +1,17 @@
+{
+  "name": "deck-box-engraver",
+  "version": "1.0.0",
+  "description": "Engrave or color-inlay SVG artwork onto a 3D-printed MTG deck box, right in the browser. Builds to one self-contained HTML file.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "manifold-3d": "3.5.3",
+    "three": "0.169.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

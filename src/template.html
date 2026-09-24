@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Deck Box Engraver</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#e9ece8; --panel:#fbfcfa; --panel-2:#f1f3ef; --line:#d3d9d2; --ink:#1b2320; --muted:#5b665f;
+  --accent:#2f5d50; --accent-ink:#ffffff; --rust:#b4532a; --ok-bg:#e0ece6; --ok:#2b5a4b;
+  --warn-bg:#f6e6d9; --warn:#8f3f1c; --view:#dfe3de;
+  --display:"Barlow Semi Condensed","Arial Narrow",system-ui,sans-serif;
+  --body:"Barlow",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#121614; --panel:#1a1f1d; --panel-2:#212725; --line:#2e3633; --ink:#e6ebe7; --muted:#98a39c;
+  --accent:#7cb8a3; --accent-ink:#0f1a16; --rust:#e08a60; --ok-bg:#1f332b; --ok:#8fcab5;
+  --warn-bg:#3a261b; --warn:#f0b08e; --view:#171c1a; color-scheme:dark;}}
+:root[data-theme="dark"]{
+  --bg:#121614; --panel:#1a1f1d; --panel-2:#212725; --line:#2e3633; --ink:#e6ebe7; --muted:#98a39c;
+  --accent:#7cb8a3; --accent-ink:#0f1a16; --rust:#e08a60; --ok-bg:#1f332b; --ok:#8fcab5;
+  --warn-bg:#3a261b; --warn:#f0b08e; --view:#171c1a; color-scheme:dark;}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.45 var(--body);display:grid;grid-template-columns:minmax(0,1fr) 380px;grid-template-rows:100%}
+#stage{position:relative;min-height:0;background:radial-gradient(120% 90% at 50% 40%,var(--panel-2),var(--view))}
+#view{position:absolute;inset:0}
+#view canvas{display:block;width:100%;height:100%;cursor:grab}
+#view.drag{outline:3px dashed var(--rust);outline-offset:-10px}
+.hud{position:absolute;left:16px;right:16px;top:14px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px;pointer-events:none}
+.brand{pointer-events:auto}
+.brand h1{font:700 22px/1 var(--display);letter-spacing:.01em;margin:0}
+.brand p{margin:4px 0 0;color:var(--muted);font-size:13px}
+.hud .tools{display:flex;gap:8px;pointer-events:auto}
+#viewmode{position:absolute;left:16px;bottom:14px;font:500 12px var(--mono);color:var(--muted);background:var(--panel);border:1px solid var(--line);padding:5px 9px;border-radius:6px}
+aside{background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.scroll{overflow:auto;padding:18px 18px 8px;display:flex;flex-direction:column;gap:18px;flex:1}
+.label{font:600 12px var(--display);text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin:0 0 8px}
+#faces{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.face{width:100%;display:grid;grid-template-columns:44px 1fr auto;align-items:center;gap:12px;text-align:left;background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:7px 10px 7px 7px;color:var(--ink);font:inherit;cursor:pointer}
+.face:hover{border-color:var(--muted)}
+.face.sel{border-color:var(--rust);box-shadow:inset 3px 0 0 var(--rust)}
+.face.drag{border-style:dashed;border-color:var(--rust);background:var(--warn-bg)}
+.thumb{width:44px;height:44px;border-radius:5px;background:#f7f7f4;display:grid;place-items:center;overflow:hidden;border:1px solid var(--line)}
+.thumb img{max-width:38px;max-height:38px}
+.plus{font:500 20px var(--mono);color:#9aa39c}
+.fname{font:600 16px/1.15 var(--display);display:flex;flex-direction:column;min-width:0}
+.fname small{font:400 12.5px var(--body);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chip{font:500 11.5px var(--mono);padding:3px 7px;border-radius:99px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.chip.ok{background:var(--ok-bg);color:var(--ok)}
+.chip.warn{background:var(--warn-bg);color:var(--warn)}
+.chip.empty{color:var(--muted);border:1px dashed var(--line)}
+.editor{border-top:1px solid var(--line);padding-top:16px;display:flex;flex-direction:column;gap:14px}
+.edhead{display:flex;flex-direction:column;gap:4px}
+.edhead h2{font:700 20px/1 var(--display);margin:0}
+#edMeta{font:12px var(--mono);color:var(--muted)}
+#edControls{display:flex;flex-direction:column;gap:14px}
+.row{display:grid;grid-template-columns:86px 1fr 92px;align-items:center;gap:10px}
+.row label{font:600 14px var(--display);letter-spacing:.02em}
+.numbox{display:flex;align-items:center;gap:5px;justify-content:flex-end}
+.numbox input{width:62px;font:500 13px var(--mono);font-variant-numeric:tabular-nums;text-align:right;padding:4px 6px;border:1px solid var(--line);border-radius:6px;background:var(--panel-2);color:var(--ink)}
+.numbox input:hover{border-color:var(--muted)}
+.numbox span{font:12px var(--mono);color:var(--muted);width:18px}
+input[type=range]{width:100%;accent-color:var(--accent)}
+.size{display:flex;justify-content:space-between;align-items:center;background:var(--panel-2);border-radius:8px;padding:8px 12px;font-size:13px;color:var(--muted)}
+#sizeOut{font:500 14px var(--mono);color:var(--ink)}
+.rot{display:flex;gap:4px}
+.mode{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--line);border-radius:8px;padding:3px;background:var(--panel-2)}
+.mode button.b{border:0;background:transparent}
+.mode button.b.on{background:var(--ink);color:var(--panel)}
+.inlay{display:grid;grid-template-columns:auto 44px;align-items:center;gap:6px 12px;justify-content:start}
+.inlay label{font:600 14px var(--display);letter-spacing:.02em}
+.inlay input{width:44px;height:28px;border:1px solid var(--line);border-radius:6px;background:var(--panel);padding:2px;cursor:pointer}
+.inlay p{grid-column:1/-1;margin:0;font-size:13px;color:var(--muted)}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:-1px;border:1px solid rgba(0,0,0,.25)}
+.rot button{flex:1}
+.btnrow{display:flex;gap:8px;flex-wrap:wrap}
+button.b{font:600 14px var(--display);letter-spacing:.03em;border-radius:7px;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:7px 12px;cursor:pointer}
+button.b:hover{border-color:var(--muted)}
+button.b.on{background:var(--ink);color:var(--panel);border-color:var(--ink)}
+button.b.quiet{color:var(--muted)}
+button:focus-visible,input:focus-visible{outline:2px solid var(--rust);outline-offset:2px}
+#warn{background:var(--warn-bg);color:var(--warn);border-radius:8px;padding:9px 12px;font-size:13.5px}
+#warn p{margin:0}#warn p+p{margin-top:6px}
+#edEmpty{background:var(--panel-2);border:1px dashed var(--line);border-radius:8px;padding:16px;display:flex;flex-direction:column;gap:10px;align-items:flex-start;color:var(--muted);font-size:14px}
+#edEmpty p{margin:0}
+.foot{border-top:1px solid var(--line);padding:14px 18px calc(16px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:10px;background:var(--panel)}
+.foot label{font:600 12px var(--display);text-transform:uppercase;letter-spacing:.09em;color:var(--muted)}
+#deckName{width:100%;font:500 15px var(--body);padding:9px 11px;border-radius:7px;border:1px solid var(--line);background:var(--panel-2);color:var(--ink)}
+#build{font:700 17px var(--display);letter-spacing:.04em;background:var(--accent);color:var(--accent-ink);border:0;border-radius:8px;padding:12px;cursor:pointer}
+#build:disabled{opacity:.6;cursor:progress}
+.hint{font-size:12.5px;color:var(--muted);margin:0}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);color:var(--panel);padding:10px 16px;border-radius:8px;font-size:14px;max-width:min(560px,calc(100% - 32px));z-index:10;box-shadow:0 6px 24px rgba(0,0,0,.2)}
+#toast.bad{background:var(--warn);color:var(--panel)}
+#loading{position:fixed;inset:0;display:none;place-items:center;background:var(--bg);z-index:20;font:600 18px var(--display);color:var(--muted)}
+body.loading #loading{display:grid}
+@media (max-width:820px){
+  body{grid-template-columns:1fr;grid-template-rows:52vh auto;height:auto}
+  html,body{height:auto}
+  aside{border-left:0;border-top:1px solid var(--line)}
+  .scroll{overflow:visible}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body class="loading">
+<div id="loading"><span id="loadingMsg">Loading the box…</span></div>
+<main id="stage">
+  <div id="view" aria-label="3D preview of the deck box. Drag to rotate, scroll to zoom."></div>
+  <div class="hud">
+    <div class="brand"><h1>Deck Box Engraver</h1><p>Drag the box to rotate · scroll to zoom · drop an SVG to place it</p></div>
+    <div class="tools"><button class="b" id="overview">Full view</button><button class="b" id="backToEdit" hidden>Back to editing</button></div>
+  </div>
+  <div id="viewmode">Preview</div>
+</main>
+<aside>
+  <div class="scroll">
+    <section>
+      <p class="label">Faces</p>
+      <ul id="faces"></ul>
+    </section>
+    <section class="editor">
+      <div class="edhead"><h2 id="edTitle">Left side</h2><span id="edMeta"></span></div>
+      <div id="edEmpty">
+        <p>No design on this face. Drop an SVG on it in the list, onto the 3D view, or choose one.</p>
+        <button class="b" id="pick">Choose SVG…</button>
+      </div>
+      <div id="edControls" hidden>
+        <div class="mode" role="group" aria-label="How this design is made">
+          <button class="b" data-mode="engrave" id="modeEngrave">Engrave</button>
+          <button class="b" data-mode="inlay" id="modeInlay">Color inlay</button>
+        </div>
+        <div id="inlayRow" class="inlay" hidden>
+          <label for="inlayColor">Preview color</label><input type="color" id="inlayColor">
+          <p id="inlayNote"></p>
+        </div>
+        <div class="size"><span>Design size</span><span id="sizeOut"></span></div>
+        <div class="row"><label for="scale">Size</label><input type="range" id="scale" min="10" max="300" step="1"><span class="numbox"><input type="number" id="scaleNum" step="1" inputmode="decimal" aria-label="scale value"><span>%</span></span></div>
+        <div class="row"><label for="dx">Left/right</label><input type="range" id="dx" step="0.5"><span class="numbox"><input type="number" id="dxNum" step="0.5" inputmode="decimal" aria-label="dx value"><span>mm</span></span></div>
+        <div class="row"><label for="dy">Up/down</label><input type="range" id="dy" step="0.5"><span class="numbox"><input type="number" id="dyNum" step="0.5" inputmode="decimal" aria-label="dy value"><span>mm</span></span></div>
+        <div class="row"><label for="weight">Line weight</label><input type="range" id="weight" min="-0.4" max="1.2" step="0.05"><span class="numbox"><input type="number" id="weightNum" step="0.05" inputmode="decimal" aria-label="weight value"><span>mm</span></span></div>
+        <div class="row"><label for="depth" id="depthLabel">Depth</label><input type="range" id="depth" min="0.2" step="0.1"><span class="numbox"><input type="number" id="depthNum" step="0.1" inputmode="decimal" aria-label="depth value"><span>mm</span></span></div>
+        <div class="row"><label>Rotate</label><div class="rot">
+          <button class="b" data-rot="0">0°</button><button class="b" data-rot="90">90°</button><button class="b" data-rot="180">180°</button><button class="b" data-rot="270">270°</button></div><span></span></div>
+        <div id="warn" hidden></div>
+        <div class="btnrow">
+          <button class="b" id="fitBtn">Fit to face</button>
+          <button class="b" id="center">Center</button>
+          <button class="b" onclick="document.getElementById('file').click()">Replace SVG…</button>
+          <button class="b" id="reset">Reset</button>
+          <button class="b quiet" id="remove">Remove</button>
+        </div>
+      </div>
+      <input type="file" id="file" accept=".svg,image/svg+xml" hidden>
+    </section>
+  </div>
+  <div class="foot">
+    <label for="deckName">File name</label>
+    <input id="deckName" value="Deck Box - LOTR" autocomplete="off">
+    <button id="build">Download STL</button>
+    <p class="hint">Drag a design on the model to move it. Shift+scroll resizes it, and arrow keys nudge it. Anything past the dashed face outline is trimmed off. Color inlays export as a .3mf with each inlay as its own part.</p>
+  </div>
+</aside>
+<div id="toast" hidden></div>
+<script>window.__WASM__="%%WASM%%";window.__BOX__="%%BOX%%";window.__SAMPLE__=%%SAMPLE%%;</script>
+<script>%%APP%%</script>
+</body>
+</html>
