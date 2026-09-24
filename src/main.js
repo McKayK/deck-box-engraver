@@ -18,6 +18,7 @@ const FACES = [
     thin: [{ r: [-40, 31.3, 40, 37], wall: 1.32, what: 'the lid rail along the front edge' }] },
 ];
 const DEFAULT_SCALE = 85;
+let artCounter = 0;
 const INLAY_COLORS = ['#c9a23a', '#3d6b4f', '#1f1f1f', '#8a2f2a', '#2c4f7c'];
 const cross = (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
 const dot = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
@@ -103,7 +104,7 @@ function svgToCross(text) {
 
 // Rotated + scaled + line-weight-adjusted art, centered at the origin (cached; only rebuilt when those change).
 function baseArt(f, s) {
-  const key = `${s.rot}|${s.scale}|${s.weight}`;
+  const key = `${s.uid}|${s.rot}|${s.scale}|${s.weight}`;
   if (s._key === key) return s._base;
   const rot = s.rot % 180 !== 0;
   const w = rot ? s.rh : s.rw, h = rot ? s.rw : s.rh;
@@ -231,7 +232,7 @@ function refreshDecal(f) {
     const solid = base.cs.extrude(0.12), geo = meshToGeo(solid.getMesh()); solid.delete();
     const mesh = new THREE.Mesh(geo, decalMats[f.id]); mesh.position.z = 0.02;
     const ghost = new THREE.Mesh(geo, ghostMat); ghost.position.z = 0.3;
-    mesh.userData = { face: f.id, key: s._key, scale: s.scale, bx: base.bx, by: base.by };
+    mesh.userData = { face: f.id, key: s._key, rot: s.rot, scale: s.scale, bx: base.bx, by: base.by };
     ghost.userData = { face: f.id };
     movers[f.id].add(mesh, ghost); decals[f.id] = mesh; ghosts[f.id] = ghost;
   }
@@ -240,7 +241,7 @@ function refreshDecal(f) {
 function updateTransform(f) {
   const s = state[f.id], mesh = decals[f.id]; if (!s || !mesh) return;
   const d = mesh.userData;
-  if (d.key.split('|')[0] !== String(s.rot)) { refreshDecal(f); return; }   // rotation needs a rebuild
+  if (d.rot !== s.rot) { refreshDecal(f); return; }   // rotation needs a rebuild
   const k = s.scale / d.scale;
   movers[f.id].position.set(s.dx, s.dy, 0); movers[f.id].scale.set(k, k, 1);
   s._trimmed = d.bx[0] * k + s.dx < -f.w / 2 || d.bx[1] * k + s.dx > f.w / 2 || d.by[0] * k + s.dy < -f.h / 2 || d.by[1] * k + s.dy > f.h / 2;
@@ -410,7 +411,7 @@ function setArt(id, fileName, text, scale = DEFAULT_SCALE) {
   const f = faceById(id);
   const r = svgToCross(text);
   const old = state[id], prevMode = old?.mode, prevColor = old?.color;
-  state[id] = { fileName, svgText: text, raw: r.raw, rw: r.rw, rh: r.rh, scale, dx: 0, dy: 0, rot: 0, depth: f.depth, weight: 0,
+  state[id] = { uid: ++artCounter, fileName, svgText: text, raw: r.raw, rw: r.rw, rh: r.rh, scale, dx: 0, dy: 0, rot: 0, depth: f.depth, weight: 0,
     mode: prevMode || 'engrave', color: prevColor || INLAY_COLORS[FACES.indexOf(f)] };
   if (old) { old.raw.delete(); old._base?.cs.delete(); }
   return r;
@@ -421,6 +422,7 @@ async function loadFile(id, file) {
     const r = setArt(id, file.name, await file.text());
     if (cutMode) setCutMode(false);
     toast(r.skipped ? `Loaded ${file.name}. Skipped ${r.skipped} outline-only path(s).` : `Loaded ${file.name} on the ${faceById(id).name.toLowerCase()}.`);
+    refreshDecal(faceById(id));
     select(id);
   } catch (e) { toast(e.message, true); }
 }
@@ -466,7 +468,7 @@ $('#remove').onclick = () => {
   refreshDecal(faceById(selected)); renderList(); renderEditor();
 };
 document.querySelectorAll('.mode button').forEach(b => b.onclick = () => {
-  const s = state[selected]; if (!s) return; s.mode = b.dataset.mode; renderEditor(); scheduleRefresh();
+  const s = state[selected]; if (!s) return; s.mode = b.dataset.mode; renderEditor(); scheduleRefresh(); updateChip(faceById(selected)); $('#build').textContent = buildLabel();
 });
 $('#inlayColor').addEventListener('input', e => { const s = state[selected]; if (!s) return; s.color = e.target.value; styleDecal(faceById(selected)); clearTimeout(settleTimer); settleTimer = setTimeout(() => updateChip(faceById(selected)), 150); });
 $('#pick').onclick = () => $('#file').click();
