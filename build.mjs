@@ -20,7 +20,8 @@ const app = result.outputFiles[0].text.replace(/<\/script/g, '<\\/script');
 
 const b64 = path => readFileSync(path).toString('base64');
 const wasm = b64('node_modules/manifold-3d/manifold.wasm');
-const box = b64('assets/deck-box-top-loader.stl');
+// Every STL in assets/ is embedded; box profiles in src/main.js refer to them by file name.
+const boxes = Object.fromEntries(readdirSync('assets').filter(f => /\.stl$/i.test(f)).map(f => [f, b64(`assets/${f}`)]));
 
 // Sample designs shown when the page opens: [face id, file name].
 const SAMPLES = [['left', 'shire.svg'], ['right', 'treebeard.svg'], ['back', 'JRR.svg'], ['top', 'cover.svg']];
@@ -29,7 +30,7 @@ const samples = SAMPLES.filter(([, f]) => available.has(f)).map(([id, f]) => [id
 const sampleJSON = JSON.stringify(samples).replace(/<\//g, '<\\/');
 
 let html = readFileSync('src/template.html', 'utf8');
-for (const [key, value] of [['%%WASM%%', wasm], ['%%BOX%%', box], ['%%SAMPLE%%', sampleJSON], ['%%APP%%', app]]) {
+for (const [key, value] of [['%%WASM%%', wasm], ['%%BOXES%%', JSON.stringify(boxes)], ['%%SAMPLE%%', sampleJSON], ['%%APP%%', app]]) {
   const [before, after] = html.split(key);
   html = before + value + after;   // split/join avoids $-pattern surprises from String.replace
 }

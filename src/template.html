@@ -106,6 +106,39 @@ body.loading #loading{display:grid}
   .scroll{overflow:visible}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+
+.profile{display:flex;flex-direction:column;gap:6px}
+.profile select,.crow select{font:500 14px var(--body);padding:6px 8px;border-radius:7px;border:1px solid var(--line);background:var(--panel-2);color:var(--ink)}
+.colors{display:flex;flex-direction:column;gap:10px;border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--panel-2)}
+.chead{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.chead .label{margin:0}
+#colorsSummary{font:12px var(--mono);color:var(--muted);text-align:right}
+.ctools{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.stepper{display:flex;align-items:center;gap:6px;font:600 14px var(--display)}
+.stepper span{margin-right:4px}
+.stepper button.b{width:30px;padding:4px 0;font-size:16px;line-height:1}
+.stepper button.b:disabled{opacity:.4;cursor:default}
+.stepper b{font:500 15px var(--mono);min-width:16px;text-align:center}
+.cnote{margin:-4px 0 0;font-size:12.5px;color:var(--muted)}
+.cgroup{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:6px;transition:box-shadow .3s}
+.cgroup.flash{animation:flash 1.1s ease-out}
+@keyframes flash{0%{box-shadow:0 0 0 3px var(--rust)}100%{box-shadow:0 0 0 0 transparent}}
+.ghead{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ghead b{font:600 15px var(--display)}
+.ghead input[type=color]{width:30px;height:24px;border:1px solid var(--line);border-radius:5px;padding:1px;background:var(--panel);cursor:pointer}
+.gw{margin-left:auto;font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:4px}
+.gw input{width:58px;font:500 12.5px var(--mono);text-align:right;padding:3px 5px;border:1px solid var(--line);border-radius:5px;background:var(--panel-2);color:var(--ink)}
+.gnote{margin-left:auto;font-size:12px;color:var(--muted)}
+.gempty{margin:0;font-size:12.5px;color:var(--muted)}
+.sw{display:inline-block;width:16px;height:16px;border-radius:4px;border:1px solid rgba(0,0,0,.2);flex:none}
+.sw.box{background:repeating-linear-gradient(45deg,var(--line) 0 3px,transparent 3px 6px)}
+.sw.engrave{background:var(--panel-2);box-shadow:inset 0 2px 3px rgba(0,0,0,.35)}
+.crow{display:grid;grid-template-columns:16px 1fr auto minmax(0,150px);align-items:center;gap:8px}
+.chex{font:12px var(--mono);color:var(--muted)}
+.cpct{font:12px var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
+.crow select{font-size:13px;padding:4px 6px;width:100%}
+.swapnote{margin:0;font-size:13px;color:var(--muted)}
+.speckrow{grid-template-columns:86px 1fr 104px}
 </style>
 </head>
 <body class="loading">
@@ -120,6 +153,10 @@ body.loading #loading{display:grid}
 </main>
 <aside>
   <div class="scroll">
+    <section id="profileRow" class="profile" hidden>
+      <label class="label" for="profile">Box model</label>
+      <select id="profile"></select>
+    </section>
     <section>
       <p class="label">Faces</p>
       <ul id="faces"></ul>
@@ -131,19 +168,32 @@ body.loading #loading{display:grid}
         <button class="b" id="pick">Choose SVG…</button>
       </div>
       <div id="edControls" hidden>
-        <div class="mode" role="group" aria-label="How this design is made">
+        <div class="mode" id="modeWrap" role="group" aria-label="How this design is made">
           <button class="b" data-mode="engrave" id="modeEngrave">Engrave</button>
           <button class="b" data-mode="inlay" id="modeInlay">Color inlay</button>
         </div>
         <div id="inlayRow" class="inlay" hidden>
           <label for="inlayColor">Preview color</label><input type="color" id="inlayColor">
-          <p id="inlayNote"></p>
         </div>
+        <div id="colorsPanel" class="colors" hidden>
+          <div class="chead"><p class="label">Colors</p><span id="colorsSummary"></span></div>
+          <div class="ctools">
+            <div class="stepper" role="group" aria-label="Number of filaments">
+              <span>Filaments</span>
+              <button class="b" id="filMinus" aria-label="Fewer filaments">−</button><b id="filCount">4</b><button class="b" id="filPlus" aria-label="More filaments">+</button>
+            </div>
+            <button class="b quiet" id="autoColors">Auto-assign</button>
+          </div>
+          <div class="row speckrow"><label for="speck">Specks</label><input type="range" id="speck" min="0" max="3" step="0.1"><span class="numbox"><input type="number" id="speckNum" step="0.1" min="0" inputmode="decimal" aria-label="Remove specks smaller than, in square millimeters"><span>mm²</span></span></div>
+          <p class="cnote">Bits of color smaller than this are absorbed by the color around them. Click a color on the model to find it here.</p>
+          <div id="colorGroups"></div>
+        </div>
+        <p id="swapNote" class="swapnote" hidden></p>
         <div class="size"><span>Design size</span><span id="sizeOut"></span></div>
         <div class="row"><label for="scale">Size</label><input type="range" id="scale" min="10" max="300" step="1"><span class="numbox"><input type="number" id="scaleNum" step="1" inputmode="decimal" aria-label="scale value"><span>%</span></span></div>
         <div class="row"><label for="dx">Left/right</label><input type="range" id="dx" step="0.5"><span class="numbox"><input type="number" id="dxNum" step="0.5" inputmode="decimal" aria-label="dx value"><span>mm</span></span></div>
         <div class="row"><label for="dy">Up/down</label><input type="range" id="dy" step="0.5"><span class="numbox"><input type="number" id="dyNum" step="0.5" inputmode="decimal" aria-label="dy value"><span>mm</span></span></div>
-        <div class="row"><label for="weight">Line weight</label><input type="range" id="weight" min="-0.4" max="1.2" step="0.05"><span class="numbox"><input type="number" id="weightNum" step="0.05" inputmode="decimal" aria-label="weight value"><span>mm</span></span></div>
+        <div class="row" id="weightRow"><label for="weight">Line weight</label><input type="range" id="weight" min="-0.4" max="1.2" step="0.05"><span class="numbox"><input type="number" id="weightNum" step="0.05" inputmode="decimal" aria-label="weight value"><span>mm</span></span></div>
         <div class="row"><label for="depth" id="depthLabel">Depth</label><input type="range" id="depth" min="0.2" step="0.1"><span class="numbox"><input type="number" id="depthNum" step="0.1" inputmode="decimal" aria-label="depth value"><span>mm</span></span></div>
         <div class="row"><label>Rotate</label><div class="rot">
           <button class="b" data-rot="0">0°</button><button class="b" data-rot="90">90°</button><button class="b" data-rot="180">180°</button><button class="b" data-rot="270">270°</button></div><span></span></div>
@@ -163,11 +213,11 @@ body.loading #loading{display:grid}
     <label for="deckName">File name</label>
     <input id="deckName" value="Deck Box - LOTR" autocomplete="off">
     <button id="build">Download STL</button>
-    <p class="hint">Drag a design on the model to move it. Shift+scroll resizes it, and arrow keys nudge it. Anything past the dashed face outline is trimmed off. Color inlays export as a .3mf with each inlay as its own part.</p>
+    <p class="hint">Drag a design on the model to move it. Shift+scroll resizes it, and arrow keys nudge it. Anything past the dashed face outline is trimmed off. Color inlays export as a .3mf with each color as its own part. Multi-color SVGs are split into up to 4 filaments automatically.</p>
   </div>
 </aside>
 <div id="toast" hidden></div>
-<script>window.__WASM__="%%WASM%%";window.__BOX__="%%BOX%%";window.__SAMPLE__=%%SAMPLE%%;</script>
+<script>window.__WASM__="%%WASM%%";window.__BOXES__=%%BOXES%%;window.__SAMPLE__=%%SAMPLE%%;</script>
 <script>%%APP%%</script>
 </body>
 </html>

@@ -15,9 +15,30 @@ Everything runs locally in the browser. The build produces **one self-contained 
 - **Trimming**: anything past the dashed face outline is cut off (shown as a faint ghost).
 - **Line weight**: thickens or thins every line in the design, baked into the export. Use +0.2 to +0.3 mm for fine art on a 0.4 mm nozzle.
 - **Warnings**: flags cuts that would leave less than 0.4 mm of wall, including the thin lid rail along the front edge of the sides (1.32 mm) and the back (1.05 mm).
-- **SVGs** need filled shapes. Outline-only paths are skipped; in Inkscape use *Path → Stroke to Path*.
+- **SVGs**: filled shapes and colored outlines both work (outlines are converted to filled shapes). Gradients are flattened to one color. SVGs that only contain an embedded picture can't be engraved; trace them first (Inkscape: *Path → Trace Bitmap*).
+
+### Multi-color SVGs
+
+When an SVG has more than one fill color, the Engrave / Color inlay switch is replaced by a **Colors** panel:
+
+- **Automatic setup**: a background color (one that covers most of the design's edge) is set to *Box color*, and the remaining colors are merged down to **4 filaments** by combining the most similar colors.
+- **Filaments − / +**: merge into fewer filaments, or split back out (up to 4). **Auto-assign** redoes the automatic setup.
+- **Each color** can be moved to any filament, to *Box color (skip)*, or to *Engrave only* (cut, no filament).
+- **Each filament** has a preview color and its own **line weight**. A thickened color wins over its neighbors; a thinned one gives its space to them.
+- **Specks**: color islands smaller than this area (mm²) are absorbed by the surrounding color. Hairline seams between colors are closed the same way.
+- **Click a color on the model** to jump to its filament in the panel.
+- Stacked shapes are resolved like the SVG draws them: shapes later in the file cover earlier ones.
+- The export has one part per filament per face (for example `jace (Back) - Filament 2 #054a72`).
+
+Upright faces (sides, top, bottom) need a filament change per color on every layer through the design; the back prints flat, so colors only change in its first few layers. The panel notes this for each face.
 
 In Bambu Studio, opening an inlay 3MF shows "invalid config, load geometry data only". That's expected for any 3MF not saved by Bambu. Click OK, expand the object in the list, and assign a filament to each inlay part.
+
+## Box models
+
+Each deck box is a **profile** in the `PROFILES` list at the top of `src/main.js`: an STL file name (from `assets/`) and a table of faces. When there's more than one profile, a **Box model** picker appears above the face list. Switching keeps designs on faces both boxes share; designs on faces the other box doesn't have are kept and come back when you switch back.
+
+To add a box: drop its STL in `assets/`, add a profile with its faces (see *Face geometry* below), and rebuild. Every STL in `assets/` is embedded automatically.
 
 ## Building
 
@@ -34,8 +55,8 @@ Requires Node 18+.
 src/main.js          App code: scene, SVG parsing, placement, drag, build, STL/3MF writers
 src/template.html    Page markup and CSS, with %%PLACEHOLDERS%% the build fills in
 build.mjs            esbuild bundle + inlining into docs/index.html
-assets/              The deck box model (STL)
-samples/             SVGs preloaded on first open
+assets/              Deck box models (STL), one per profile
+samples/             SVGs: the four LOTR designs preload on first open; jace.svg and uncle-iroh.svg are multi-color test files
 docs/index.html      Built output (committed so GitHub Pages can serve it)
 Dockerfile           Two-stage build: node builds the page, nginx serves it
 nginx.conf           Container's nginx config (gzip, no-cache)
@@ -48,10 +69,11 @@ docker-compose.yml   Runs the container on port 8090
 - **manifold-3d** (C++ compiled to WebAssembly) does the geometry. It turns SVG paths into 2D cross-sections, handles line-weight offsets and trimming, and runs the final `box − cutters` (engrave) or `box ∩ cutter` (inlay) booleans. Its output is always watertight.
 - The wasm binary and the box STL are embedded as base64 and passed straight in, so the page never fetches anything. (Google Fonts is the only external link, and it falls back to system fonts offline.)
 - SVG outlines are simplified at 0.01 mm, and the final mesh gets a light cleanup. Without that, the micro-edges from finely sampled curves collapse into non-manifold edges once written to STL.
+- Multi-color pipeline (per face, cached until something changes): visible region per color → group by filament → drop specks → per-filament line weight (thicker wins) → neighbors grow in small steps to fill gaps → colors separated by 0.008 mm so each part is a clean solid. The box loses the whole pocket in one cut, and each filament becomes `box ∩ extruded region`.
 
 ### Face geometry
 
-Face positions are hard-coded in the `FACES` table at the top of `src/main.js`, in the box's own coordinates (lying on its back, front = +z, top = −y). Each face has an outward normal `N`, an art "up" vector `U`, its center `c`, its size `w × h`, wall thickness, and any thin strips. To use a different box model, replace the STL in `assets/` and update that table.
+Each profile's `faces` table is in the box's own coordinates (the top loader lies on its back, front = +z, top = −y). Each face has an outward normal `N`, an art "up" vector `U`, its center `c`, its size `w × h`, wall thickness, default depth, and any thin strips (local rectangles with a thinner wall, used for warnings).
 
 ## Hosting with Docker
 
