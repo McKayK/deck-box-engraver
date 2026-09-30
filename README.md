@@ -38,7 +38,12 @@ In Bambu Studio, opening an inlay 3MF shows "invalid config, load geometry data 
 
 Each deck box is a **profile** in the `PROFILES` list at the top of `src/main.js`: an STL file name (from `assets/`) and a table of faces. When there's more than one profile, a **Box model** picker appears above the face list. Switching keeps designs on faces both boxes share; designs on faces the other box doesn't have are kept and come back when you switch back.
 
-To add a box: drop its STL in `assets/`, add a profile with its faces (see *Face geometry* below), and rebuild. Every STL in `assets/` is embedded automatically.
+Included models:
+
+- **Top loader** (`assets/top-loader.stl`): the standard box, printed on its back.
+- **Top loader, detail top** (`assets/top-loader-detail-top.stl`): the top is a separate plate (74.3 × 65.3 × 2.4 mm) printed art-side down on the build plate for sharper detail, then glued into a matching pocket in the top. Its **Top plate** face is that plate's bed-side face, so top designs print directly against the bed, and multi-color there only changes filament for the first few layers. The preview shows the plate installed in its pocket; the export keeps it lying flat beside the box, as in the STL.
+
+To add a box: drop its STL in `assets/`, add a profile with its faces (see *Face geometry* below), and rebuild. Every STL in `assets/` is embedded automatically. A separately printed piece can be shown installed in the preview with a profile's `pieces` entry (which vertices belong to it, and a 4×4 matrix from print position to installed position); faces on that piece set `piece: <index>`.
 
 ## Building
 
@@ -55,7 +60,7 @@ Requires Node 18+.
 src/main.js          App code: scene, SVG parsing, placement, drag, build, STL/3MF writers
 src/template.html    Page markup and CSS, with %%PLACEHOLDERS%% the build fills in
 build.mjs            esbuild bundle + inlining into docs/index.html
-assets/              Deck box models (STL), one per profile
+assets/              Deck box models (STL), one per profile: top-loader.stl, top-loader-detail-top.stl
 samples/             SVGs: the four LOTR designs preload on first open; jace.svg and uncle-iroh.svg are multi-color test files
 docs/index.html      Built output (committed so GitHub Pages can serve it)
 Dockerfile           Two-stage build: node builds the page, nginx serves it

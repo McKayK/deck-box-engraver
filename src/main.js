@@ -8,22 +8,39 @@ import Module from 'manifold-3d/manifold.js';
    Face coords are the model's own coords (this box lies on its back, front = +z, top = -y).
    Each face: outward normal N, art "up" U, center c of the full face, full face size (w along R, h along U),
    wall thickness behind the face, default depth, and thin strips (local rects) where the wall is thinner. */
+// Faces shared by both top-loader models (left, right, back, bottom are identical in both STLs).
+const X = 39.67, Y = 51.82;
+const SIDE_FACES = {
+  left:   { id: 'left',   name: 'Left side',  N: [1, 0, 0],  U: [0, -1, 0], c: [X, 0, 36.175],  w: 72.85, h: 103.64, wall: 3.77, depth: 1.0,
+            thin: [{ r: [31.3, -52, 37, 52], wall: 1.32, what: 'the lid rail along the front edge' }] },
+  right:  { id: 'right',  name: 'Right side', N: [-1, 0, 0], U: [0, -1, 0], c: [-X, 0, 36.175], w: 72.85, h: 103.64, wall: 3.77, depth: 1.0,
+            thin: [{ r: [-37, -52, -31.3, 52], wall: 1.32, what: 'the lid rail along the front edge' }] },
+  back:   { id: 'back',   name: 'Back',       N: [0, 0, -1], U: [0, -1, 0], c: [0, 0, -0.25],   w: 79.34, h: 103.64, wall: 1.05, depth: 0.5, thin: [] },
+  bottom: { id: 'bottom', name: 'Bottom',     N: [0, 1, 0],  U: [0, 0, 1],  c: [0, Y, 36.175],  w: 79.34, h: 72.85, wall: 4.05, depth: 1.0,
+            thin: [{ r: [-40, 31.3, 40, 37], wall: 1.32, what: 'the lid rail along the front edge' }] },
+};
+// Detail-top plate: printed wide face down (that face is the outside of the top once glued in).
+// It lies flat beside the box in the STL; `pieces` moves it into its pocket for the preview only (export keeps the
+// print layout). Plate coords -> installed: x stays, plate z -> box y (wide face flush at y = -51.82), plate y -> -z.
+const PW = 74.273, PH = 65.295, PE = 1.2;   // plate wide-face size; sloped-edge strip width
+const PLATE = { cx: -0.0635, cy: -94.6274, z: -0.254, t: 2.413 };
 const PROFILES = [
   {
-    id: 'top-loader', name: 'Top loader', stl: 'deck-box-top-loader.stl',
-    faces: (() => {
-      const X = 39.67, Y = 51.82;
-      return [
-        { id: 'left',   name: 'Left side',  N: [1, 0, 0],  U: [0, -1, 0], c: [X, 0, 36.175],  w: 72.85, h: 103.64, wall: 3.77, depth: 1.0,
-          thin: [{ r: [31.3, -52, 37, 52], wall: 1.32, what: 'the lid rail along the front edge' }] },
-        { id: 'right',  name: 'Right side', N: [-1, 0, 0], U: [0, -1, 0], c: [-X, 0, 36.175], w: 72.85, h: 103.64, wall: 3.77, depth: 1.0,
-          thin: [{ r: [-37, -52, -31.3, 52], wall: 1.32, what: 'the lid rail along the front edge' }] },
-        { id: 'back',   name: 'Back',       N: [0, 0, -1], U: [0, -1, 0], c: [0, 0, -0.25],   w: 79.34, h: 103.64, wall: 1.05, depth: 0.5, thin: [] },
-        { id: 'top',    name: 'Top',        N: [0, -1, 0], U: [0, 0, -1], c: [0, -Y, 34.375], w: 79.34, h: 69.25, wall: 5.3,  depth: 1.0, thin: [] },
-        { id: 'bottom', name: 'Bottom',     N: [0, 1, 0],  U: [0, 0, 1],  c: [0, Y, 36.175],  w: 79.34, h: 72.85, wall: 4.05, depth: 1.0,
-          thin: [{ r: [-40, 31.3, 40, 37], wall: 1.32, what: 'the lid rail along the front edge' }] },
-      ];
-    })(),
+    id: 'standard', name: 'Top loader', stl: 'top-loader.stl',
+    faces: [SIDE_FACES.left, SIDE_FACES.right, SIDE_FACES.back,
+      { id: 'top', name: 'Top', N: [0, -1, 0], U: [0, 0, -1], c: [0, -Y, 34.375], w: 79.34, h: 69.25, wall: 5.3, depth: 1.0, thin: [] },
+      SIDE_FACES.bottom],
+  },
+  {
+    id: 'detail-top', name: 'Top loader, detail top (glued-in plate)', stl: 'top-loader-detail-top.stl',
+    pieces: [{ select: (x, y) => y < -56,
+      matrix: [1, 0, 0, 0,  0, 0, -1, 0,  0, 1, 0, 0,  0.0635, -51.566, -59.63, 1] }],
+    faces: [SIDE_FACES.left, SIDE_FACES.right, SIDE_FACES.back,
+      { id: 'top', name: 'Top plate', piece: 0, N: [0, 0, -1], U: [0, 1, 0], c: [PLATE.cx, PLATE.cy, PLATE.z], w: PW, h: PH,
+        wall: PLATE.t, depth: 1.0,
+        thin: [[-PW / 2, -PH / 2, -PW / 2 + PE, PH / 2], [PW / 2 - PE, -PH / 2, PW / 2, PH / 2], [-PW / 2, -PH / 2, PW / 2, -PH / 2 + PE], [-PW / 2, PH / 2 - PE, PW / 2, PH / 2]]
+          .map(r => ({ r, wall: 0.8, what: 'the sloped edge of the top plate' })) },
+      SIDE_FACES.bottom],
   },
 ];
 
@@ -67,6 +84,21 @@ function toManifold(pos) {
   const mesh = new wasm.Mesh({ numProp: 3, vertProperties: new Float32Array(verts), triVerts: tris });
   mesh.merge();
   return new wasm.Manifold(mesh);
+}
+const pieceMat = f => f.piece !== undefined ? new THREE.Matrix4().fromArray(profile.pieces[f.piece].matrix) : new THREE.Matrix4();
+const viewMat = (f, lift = 0) => pieceMat(f).multiply(new THREE.Matrix4().fromArray(faceMat(f, lift)));
+// Preview-only: move separately printed pieces (e.g. the detail-top plate) into their installed position.
+function displayGeo(mesh) {
+  const g = meshToGeo(mesh);
+  if (!profile.pieces) return g;
+  const pos = g.attributes.position, v = new THREE.Vector3(), mats = profile.pieces.map(p => new THREE.Matrix4().fromArray(p.matrix));
+  for (let t = 0; t < pos.count; t += 3) {
+    const k = profile.pieces.findIndex(p => p.select(pos.getX(t), pos.getY(t), pos.getZ(t)));
+    if (k < 0) continue;
+    for (let j = t; j < t + 3; j++) { v.fromBufferAttribute(pos, j).applyMatrix4(mats[k]); pos.setXYZ(j, v.x, v.y, v.z); }
+  }
+  g.computeVertexNormals();
+  return g;
 }
 function meshToGeo(mesh) {
   const g = new THREE.BufferGeometry();
@@ -364,7 +396,7 @@ new ResizeObserver(resize).observe(view);
 (function loop() { controls.update(); renderer.render(scene, camera); requestAnimationFrame(loop); })();
 
 function lookAtFace(f, animate = true) {
-  const d = f ? new THREE.Vector3(...f.N).applyEuler(root.rotation).normalize() : new THREE.Vector3(0.55, 0.35, 1).normalize();
+  const d = f ? new THREE.Vector3(0, 0, 1).transformDirection(inner.matrixWorld.clone().multiply(viewMat(f))).normalize() : new THREE.Vector3(0.55, 0.35, 1).normalize();
   const vertical = f && Math.abs(d.y) > 0.9;
   const to = d.clone().multiplyScalar(270).add(new THREE.Vector3(0, vertical ? 0 : 25, vertical ? 40 : 0));
   const tgt = new THREE.Vector3(0, 0, 0);
@@ -378,7 +410,7 @@ function lookAtFace(f, animate = true) {
 }
 
 function drawFrame(f) {
-  const hw = f.w / 2, hh = f.h / 2, m = new THREE.Matrix4().fromArray(faceMat(f, 0.2));
+  const hw = f.w / 2, hh = f.h / 2, m = viewMat(f, 0.2);
   const pts = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh], [-hw, -hh]].map(([a, b]) => new THREE.Vector3(a, b, 0).applyMatrix4(m));
   const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
     new THREE.LineDashedMaterial({ color: 0xb4532a, dashSize: 2.5, gapSize: 1.8, transparent: true, opacity: 0.9 }));
@@ -392,7 +424,7 @@ function drawFrame(f) {
 // planes, so slider drags cost almost nothing. Geometry is rebuilt only when the shape itself settles.
 const faceGroups = {}, movers = {}, clipPlanes = {}, groupMats = {};
 function initFaceGroup(f) {
-  const g = new THREE.Group(); g.matrixAutoUpdate = false; g.matrix.fromArray(faceMat(f)); inner.add(g);
+  const g = new THREE.Group(); g.matrixAutoUpdate = false; g.matrix.copy(viewMat(f)); inner.add(g);
   const mover = new THREE.Group(); g.add(mover);
   faceGroups[f.id] = g; movers[f.id] = mover; groupMats[f.id] = {};
   inner.updateMatrixWorld(true); g.updateMatrixWorld(true);
@@ -488,14 +520,12 @@ function hitDesign(e) {
 }
 function facePoint(f, e) {  // pointer -> (u, v) on the face plane, in mm
   setRay(e);
-  inner.updateMatrixWorld();
-  const n = new THREE.Vector3(...f.N).transformDirection(inner.matrixWorld);
-  const c = new THREE.Vector3(...f.c).applyMatrix4(inner.matrixWorld);
-  const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(n, c);
+  const M = faceGroups[f.id].matrixWorld;   // face frame: x = art right, y = art up, z = out of the face
+  const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 0, 1).transformDirection(M), new THREE.Vector3().setFromMatrixPosition(M));
   const p = ray.ray.intersectPlane(plane, new THREE.Vector3());
   if (!p) return null;
-  const local = inner.worldToLocal(p).toArray().map((x, i) => x - f.c[i]);
-  return [dot(local, f.R), dot(local, f.U)];
+  p.applyMatrix4(M.clone().invert());
+  return [p.x, p.y];
 }
 let drag = null;
 canvas.addEventListener('pointerdown', e => {
@@ -907,7 +937,7 @@ $('#build').onclick = async () => {
     const { body, parts } = model;
     if (body.status() !== 'NoError') throw new Error('The cut failed: ' + body.status());
     const bodyMesh = body.getMesh();
-    setCutMode(true, meshToGeo(bodyMesh), parts.map(p => ({ color: p.color, geo: meshToGeo(p.man.getMesh()) })));
+    setCutMode(true, displayGeo(bodyMesh), parts.map(p => ({ color: p.color, geo: displayGeo(p.man.getMesh()) })));
     const name = ($('#deckName').value.trim() || 'Deck Box').replace(/[\\/:*?"<>|]/g, '');
     let blob, file;
     if (parts.length) { blob = await write3MF(name, body, parts); file = `${name}.3mf`; }
@@ -939,7 +969,7 @@ function loadProfile(p) {
   for (const s of Object.values(state)) if (s._base) { disposeBase(s._base); s._base = null; s._key = null; }
   const stl = window.__BOXES__[p.stl];
   boxManifold = toManifold(parseSTL(b64(stl).buffer));
-  boxGeo = meshToGeo(boxManifold.getMesh());
+  boxGeo = displayGeo(boxManifold.getMesh());
   boxMesh = new THREE.Mesh(boxGeo, boxMat); inner.add(boxMesh);
   FACES.forEach(drawFrame); FACES.forEach(initFaceGroup);
   FACES.forEach(refreshDecal);
@@ -959,7 +989,7 @@ profSel.onchange = () => {
 (async () => {
   wasm = await Module({ wasmBinary: b64(window.__WASM__) });
   wasm.setup();
-  FACES = PROFILES[0].faces.map(f => ({ ...f, R: cross(f.U, f.N) }));
+  FACES = PROFILES[0].faces.map(f => ({ ...f, R: cross(f.U, f.N) })); profile = PROFILES[0];
   for (const [id, file, text] of window.__SAMPLE__) { try { setArt(id, file, text); } catch (e) { console.warn(e); } }
   loadProfile(PROFILES[0]);
   resize(); lookAtFace(null, false);
