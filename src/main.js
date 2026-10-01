@@ -45,10 +45,14 @@ const PROFILES = [
 ];
 
 const DEFAULT_SCALE = 85;
-const MAX_FILAMENTS = 4;          // AMS slots
 const LAYER_H = 0.2;              // typical layer height, for the color-swap note
 let artCounter = 0;
-const INLAY_COLORS = ['#c9a23a', '#3d6b4f', '#1f1f1f', '#8a2f2a', '#2c4f7c'];
+// One palette for the whole box: AMS slot 1 is the box filament, slots 2-4 are design colors shared by every face.
+const SLOTS = 3;
+// `active` = slots that have a color claimed (by the first design, a later design filling an empty slot, or you).
+// Claimed slot colors never change when designs are added or removed; only Auto-match or editing a swatch changes them.
+const palette = { box: '#d9d4c7', boxSet: false, slots: ['#1f1f1f', '#c9a23a', '#8a2f2a'], active: new Set() };
+const slotKey = i => 'c' + (i + 1), slotIdx = k => +k.slice(1) - 1, slotLabel = i => `Slot ${i + 2}`;
 const ENGRAVE_COLOR = 0x2f5d50, ENGRAVE_SEL = 0xb4532a;
 const cross = (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
 const dot = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
@@ -100,6 +104,19 @@ function displayGeo(mesh) {
   g.computeVertexNormals();
   return g;
 }
+// Flat preview geometry for a 2D shape (triangulated top face only, normal +z).
+function flatGeo(cs) {
+  const polys = cs.toPolygons().map(poly => poly.map(p => Array.isArray(p) ? p : [p.x, p.y]));
+  const n = polys.reduce((a, q) => a + q.length, 0), pos = new Float32Array(n * 3), nor = new Float32Array(n * 3);
+  let k = 0; for (const q of polys) for (const [x, y] of q) { pos[k * 3] = x; pos[k * 3 + 1] = y; nor[k * 3 + 2] = 1; k++; }
+  const tris = n ? wasm.triangulate(polys, 1e-6) : [];
+  const idx = new Uint32Array(tris.length * 3);
+  tris.forEach((t, i) => { const a = Array.isArray(t) ? t : [t.x, t.y, t.z]; idx[i * 3] = a[0]; idx[i * 3 + 1] = a[1]; idx[i * 3 + 2] = a[2]; });
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+  g.setIndex(new THREE.BufferAttribute(idx, 1));
+  return g;
+}
 function meshToGeo(mesh) {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(mesh.vertProperties.slice(), 3));
@@ -123,10 +140,18 @@ function writeSTL(mesh) {
 }
 
 /* ---------- Color helpers ---------- */
+// Returns '#rrggbb', or null for "no paint" (none/transparent) and for anything unrecognized.
+// THREE.Color.setStyle doesn't throw on bad input (it warns and keeps its old value, white), so validate first.
+let unknownColors = new Set();
 function normColor(str) {
-  if (!str || str === 'none' || str === 'transparent') return null;
-  if (str === 'currentColor') return '#000000';
-  try { return '#' + new THREE.Color().setStyle(str).getHexString(); } catch { return null; }
+  if (str == null) return null;
+  const v = String(str).trim(), lv = v.toLowerCase();
+  if (!v || lv === 'none' || lv === 'transparent' || lv === 'inherit') return null;
+  if (lv === 'currentcolor') return '#000000';
+  const ok = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(v) || /^(rgba?|hsla?)\(/i.test(v) || lv in THREE.Color.NAMES;
+  if (!ok) { unknownColors.add(v); return null; }
+  try { return '#' + new THREE.Color().setStyle(/^#[0-9a-f]{4}$|^#[0-9a-f]{8}$/i.test(v) ? v.slice(0, v.length === 5 ? 4 : 7) : lv in THREE.Color.NAMES ? lv : v).getHexString(); }
+  catch { unknownColors.add(v); return null; }
 }
 function hexToLab(hex) {
   const lin = c => (c /= 255, c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
@@ -159,6 +184,9 @@ function strokeCS(pts, closed, w) {   // polyline -> union of segment quads (squ
   return quads.length ? new wasm.CrossSection(quads, 'NonZero') : null;
 }
 function parseSVG(text) {
+  // Some apps write "None"/"NONE"/"Transparent". Normalize so they mean no paint (in attributes and in CSS).
+  text = text.replace(/((?:fill|stroke)\s*(?:=\s*["']|:)\s*)(none|transparent)\b/gi, (m, pre, kw) => pre + kw.toLowerCase());
+  unknownColors = new Set();
   const data = new SVGLoader().parse(text);
   let doc = null; const docOf = () => doc || (doc = new DOMParser().parseFromString(text, 'image/svg+xml'));
   const shapes = []; let skippedOutlines = 0, gradients = 0;
@@ -188,17 +216,31 @@ function parseSVG(text) {
       if (parts.length) { shapes.push({ hex: stroke, cs: unionAll(parts) }); parts.forEach(x => x.delete()); }
     } else if (!fill && !stroke) skippedOutlines++;
   }
-  if (!shapes.length) throw new Error('No shapes found in this SVG.' + (/<image/.test(text) ? ' It contains an embedded picture, which can\'t be engraved. Trace it to vectors first (Inkscape: Path → Trace Bitmap).' : ''));
-  // Painter's order: each shape only keeps what nothing painted after it covers.
-  const visible = new Map(); let above = null;
-  for (let i = shapes.length - 1; i >= 0; i--) {
-    const sh = shapes[i];
-    const vis = above ? sh.cs.subtract(above) : sh.cs.translate([0, 0]);
-    const na = above ? above.add(sh.cs) : sh.cs.translate([0, 0]); if (above) above.delete(); above = na;
-    if (!vis.isEmpty()) { const prev = visible.get(sh.hex); visible.set(sh.hex, prev ? prev.add(vis) : vis); if (prev) { prev.delete(); vis.delete(); } }
-    sh.cs.delete();
+  if (!shapes.length) {
+    let why = '';
+    if (/<image/.test(text)) why = ' It contains an embedded picture, which can\'t be engraved. Trace it to vectors first (Inkscape: Path → Trace Bitmap).';
+    else if (unknownColors.size) why = ` Its colors weren't recognized (${[...unknownColors].slice(0, 3).map(c => `"${c}"`).join(', ')}). Re-export it with plain hex colors like #1e5aa8.`;
+    throw new Error('No shapes found in this SVG.' + why);
   }
-  const b = above.bounds(); const total = above.area(); above.delete();
+  // Painter's order: each shape only keeps what nothing painted after it covers. Only later shapes whose bounding
+  // boxes overlap can cover it, so subtract just those (traced art can have hundreds of small, local shapes).
+  for (const sh of shapes) { const bb = sh.cs.bounds(); sh.bb = [bb.min[0], bb.min[1], bb.max[0], bb.max[1]]; }
+  const hit = (a, c) => a[0] <= c[2] && c[0] <= a[2] && a[1] <= c[3] && c[1] <= a[3];
+  const byColor = new Map();
+  for (let i = 0; i < shapes.length; i++) {
+    const sh = shapes[i], cover = [];
+    for (let j = i + 1; j < shapes.length; j++) if (hit(sh.bb, shapes[j].bb)) cover.push(shapes[j].cs);
+    let vis = sh.cs;
+    if (cover.length) { const u = unionAll(cover); vis = sh.cs.subtract(u); u.delete(); }
+    if (!vis.isEmpty()) { if (!byColor.has(sh.hex)) byColor.set(sh.hex, []); byColor.get(sh.hex).push(vis); }
+    else if (vis !== sh.cs) vis.delete();
+  }
+  const visible = new Map();
+  for (const [hex, parts] of byColor) visible.set(hex, unionAll(parts));
+  const all = unionAll(shapes.map(sh => sh.cs));
+  for (const parts of byColor.values()) for (const v of parts) if (!shapes.some(sh => sh.cs === v)) v.delete();
+  shapes.forEach(sh => sh.cs.delete());
+  const b = all.bounds(); const total = all.area(); all.delete();
   if (!(b.max[0] > b.min[0])) throw new Error('No shapes found in this SVG.');
   const cx = (b.min[0] + b.max[0]) / 2, cy = (b.min[1] + b.max[1]) / 2, s = 1 / Math.max(b.max[0] - b.min[0], b.max[1] - b.min[1]);
   const layers = [];
@@ -207,7 +249,7 @@ function parseSVG(text) {
     if (a > total * 1e-5) layers.push({ hex, cs: norm, area: a / total }); else norm.delete();
   }
   layers.sort((p, q) => q.area - p.area);
-  return { layers, rw: (b.max[0] - b.min[0]) * s, rh: (b.max[1] - b.min[1]) * s, skippedOutlines, gradients, hasImage: /<image/.test(text) };
+  return { layers, rw: (b.max[0] - b.min[0]) * s, rh: (b.max[1] - b.min[1]) * s, skippedOutlines, gradients, hasImage: /<image/.test(text), unknown: [...unknownColors] };
 }
 
 // Background = a color that covers most of a thin band around the design's edge (e.g. a white box behind the art).
@@ -218,39 +260,88 @@ function detectBackground(layers, rw, rh) {
   band.delete();
   return best?.hex || null;
 }
-// Merge colors into n filaments: repeatedly merge the two closest clusters (Lab distance). Cluster color = its biggest member.
-function clusterColors(layers, hexes, n) {
-  let cl = hexes.map(h => { const l = layers.find(x => x.hex === h); return { members: [h], lead: h, area: l.area, lab: hexToLab(h) }; });
+// Weighted merge of colors into n groups: repeatedly merge the two closest (Lab distance). Group color = its heaviest member.
+function cluster(items, n) {
+  let cl = items.map(it => ({ members: [it.hex], lead: it.hex, w: it.w, lab: hexToLab(it.hex) }));
   while (cl.length > n) {
     let bi = 0, bj = 1, bd = Infinity;
     for (let i = 0; i < cl.length; i++) for (let j = i + 1; j < cl.length; j++) { const d = labDist(cl[i].lab, cl[j].lab); if (d < bd) { bd = d; bi = i; bj = j; } }
-    const a = cl[bi], b = cl[bj], big = a.area >= b.area ? a : b;
-    cl.splice(bj, 1); cl[bi] = { members: [...a.members, ...b.members], lead: big.lead, area: a.area + b.area, lab: big.lab };
+    const a = cl[bi], b = cl[bj], big = a.w >= b.w ? a : b;
+    cl.splice(bj, 1); cl[bi] = { members: [...a.members, ...b.members], lead: big.lead, w: a.w + b.w, lab: big.lab };
   }
-  return cl.sort((p, q) => q.area - p.area);
+  return cl.sort((p, q) => q.w - p.w);
 }
-function autoAssign(s, n) {
-  const keep = {}; for (const [h, t] of Object.entries(s.assign || {})) if (t === 'box' || t === 'engrave') keep[h] = t;
-  const free = s.layers.map(l => l.hex).filter(h => !keep[h]);
-  const cl = clusterColors(s.layers, free, Math.max(1, Math.min(n, free.length)));
-  s.assign = { ...keep };
-  s.fils = cl.map((c, i) => { c.members.forEach(h => s.assign[h] = 'f' + (i + 1)); return { color: c.lead, weight: s.fils?.[i]?.weight || 0 }; });
-  s.nFil = cl.length;
+const BOX_MATCH = 14;   // Lab distance under which a design color counts as "the box color" (only once the box color is set)
+const isFixed = (s, hex) => s.manual?.[hex] || s.assign[hex] === 'engrave' || s.bg === hex;
+const NEW_SLOT_DIST = 20;   // a design color this far (Lab) from every claimed slot may take an empty slot
+function nearestSlot(hex) {
+  const lab = hexToLab(hex); let best = -1, bd = Infinity;
+  for (const i of palette.active) { const d = labDist(lab, hexToLab(palette.slots[i])); if (d < bd) { bd = d; best = i; } }
+  if (best < 0) { best = 0; palette.slots[0] = hex; palette.active.add(0); }   // nothing claimed yet
+  return best;
+}
+const freeColors = s => s.layers.filter(l => !isFixed(s, l.hex) && !matchesBox(l.hex));
+// A newly loaded design: if no slot is claimed yet, its own colors set the palette. Otherwise claimed colors stay as
+// they are; clearly different colors may take empty slots (biggest first); everything maps to the nearest slot.
+function addDesignToPalette(f, s) {
+  const { W, H } = fitOf(f, s);
+  if (!palette.active.size) {
+    const cl = cluster(freeColors(s).map(l => ({ hex: l.hex, w: l.area * W * H })), SLOTS);
+    cl.forEach((c, i) => { palette.slots[i] = c.lead; palette.active.add(i); });
+  } else {
+    for (const l of freeColors(s).sort((a, b) => b.area - a.area)) {
+      const empty = [...Array(SLOTS).keys()].find(i => !palette.active.has(i));
+      if (empty === undefined) break;
+      const lab = hexToLab(l.hex), d = Math.min(...[...palette.active].map(i => labDist(lab, hexToLab(palette.slots[i]))));
+      if (d > NEW_SLOT_DIST) { palette.slots[empty] = l.hex; palette.active.add(empty); }
+    }
+  }
+  mapToPalette(s);
+}
+const matchesBox = hex => palette.boxSet && labDist(hexToLab(hex), hexToLab(palette.box)) < BOX_MATCH;
+// Auto-match (only when you press it): re-pick the 3 design colors from every multi-color face at once (weighted
+// by printed area), then map each face's colors onto them. Engrave-only colors and backgrounds are left alone.
+function autoPalette() {
+  const items = new Map();
+  for (const f of FACES) {
+    const s = state[f.id]; if (!s?.multi) continue;
+    const { W, H } = fitOf(f, s);
+    for (const l of s.layers) if (!isFixed(s, l.hex) && !matchesBox(l.hex)) items.set(l.hex, (items.get(l.hex) || 0) + l.area * W * H);
+  }
+  const cl = cluster([...items].map(([hex, w]) => ({ hex, w })), SLOTS);
+  if (!cl.length) return;
+  palette.active = new Set();
+  cl.forEach((c, i) => { palette.slots[i] = c.lead; palette.active.add(i); });
+  for (const f of FACES) { const s = state[f.id]; if (s?.multi) mapToPalette(s); }
+}
+// Map a design's free colors to the nearest palette slot (or to the box, if they match the box filament).
+function mapToPalette(s) {
+  for (const l of s.layers) {
+    if (isFixed(s, l.hex)) { if (s.bg === l.hex && !s.manual?.[l.hex]) s.assign[l.hex] = 'box'; continue; }
+    s.assign[l.hex] = matchesBox(l.hex) ? 'box' : slotKey(nearestSlot(l.hex));
+  }
+}
+function resetFaceColors(s) {
+  s.manual = {}; s.assign = {};
+  if (s.bg) s.assign[s.bg] = 'box';
 }
 
 /* ---------- Art -> groups (what gets cut / inlaid) ---------- */
 // A group is a set of source colors that print as one thing: an inlay filament, engrave-only, or box color.
 function groupSpecs(s) {
-  if (!s.multi) return [{ key: s.mode === 'inlay' ? 'f1' : 'engrave', kind: s.mode === 'inlay' ? 'inlay' : 'engrave', color: s.color, weight: s.weight, hexes: [s.layers[0].hex], label: s.mode === 'inlay' ? 'Inlay' : 'Engrave' }];
+  if (!s.multi) {
+    const inlay = s.mode === 'inlay', i = slotIdx(s.slot || 'c1');
+    return [{ key: inlay ? slotKey(i) : 'engrave', kind: inlay ? 'inlay' : 'engrave', color: inlay ? palette.slots[i] : null, weight: s.weight, hexes: [s.layers[0].hex], label: inlay ? slotLabel(i) : 'Engrave' }];
+  }
   const out = [];
-  for (let i = 0; i < s.nFil; i++) out.push({ key: 'f' + (i + 1), kind: 'inlay', color: s.fils[i].color, weight: s.fils[i].weight, hexes: [], label: `Filament ${i + 1}` });
+  for (let i = 0; i < SLOTS; i++) out.push({ key: slotKey(i), kind: 'inlay', color: palette.slots[i], weight: s.weights?.[slotKey(i)] || 0, hexes: [], label: slotLabel(i) });
   out.push({ key: 'engrave', kind: 'engrave', color: null, weight: 0, hexes: [], label: 'Engrave only' });
   out.push({ key: 'box', kind: 'box', color: null, weight: 0, hexes: [], label: 'Box color' });
-  for (const l of s.layers) out.find(g => g.key === (s.assign[l.hex] || 'box')).hexes.push(l.hex);
+  for (const l of s.layers) (out.find(g => g.key === (s.assign[l.hex] || 'box')) || out[out.length - 1]).hexes.push(l.hex);
   return out;
 }
 function artKey(s) {
-  return [s.uid, s.rot, s.scale, s.multi ? JSON.stringify([s.assign, s.fils.slice(0, s.nFil).map(f => f.weight), s.speck]) : `${s.mode}|${s.weight}`].join('|');
+  return [s.uid, s.rot, s.scale, s.multi ? JSON.stringify([s.assign, s.weights, s.speck]) : `${s.mode}|${s.weight}|${s.slot}`].join('|');
 }
 // Rotated, scaled and cleaned art centered at the origin, in mm. Cached until something that changes the shape changes.
 function baseArt(f, s) {
@@ -270,7 +361,9 @@ function baseArt(f, s) {
   L.forEach(l => l.cs.delete());
   const cutGroups = groups.filter(g => g.kind !== 'box' && !g.cs.isEmpty());
   let sil = unionAll(cutGroups.map(g => g.cs));
-  if (s.multi) { const c = sil.offset(0.01, 'Miter', 2).offset(-0.01, 'Miter', 2).simplify(0.0001); sil.delete(); sil = c; }
+  // Multi-color pocket: close hairline gaps between colors (so the box keeps no thin fins), then open by 0.004 mm so
+  // spots where the outline touches itself at a single point are split (they'd be non-manifold edges in the box).
+  if (s.multi) { const c = sil.offset(0.01, 'Miter', 2).offset(-0.01, 'Miter', 2).offset(-0.004, 'Miter', 2).offset(0.004, 'Miter', 2).simplify(0.0001); sil.delete(); sil = c; }
   const b = sil.bounds(), empty = sil.isEmpty();
   if (s._base) disposeBase(s._base);
   s._base = { groups: cutGroups, boxRegion: groups.find(g => g.kind === 'box')?.cs, sil, W: w * fit, H: h * fit,
@@ -310,7 +403,7 @@ function resolveMulti(L, specs, speck) {
   taken?.delete();
   const covered = unionAll(finals);
   let gaps = sil.subtract(covered); covered.delete();
-  for (const step of [0.08, 0.2, 0.3, 0.4]) {
+  for (const step of [0.08, 0.25, 0.5]) {
     if (gaps.isEmpty() || gaps.area() < 1e-4) break;
     // Only the parts of each color right next to a gap can grow into it, so work on just those (much faster).
     const near = gaps.offset(step + 0.01, 'Miter', 2);
@@ -327,7 +420,7 @@ function resolveMulti(L, specs, speck) {
   }
   gaps.delete(); sil.delete();
   return specs.map((g, i) => {
-    const cs = g.kind === 'box' ? finals[i] : finals[i].simplify(0.001).offset(-0.004, 'Miter', 2).offset(0.004, 'Miter', 2).simplify(0.0001);
+    const cs = g.kind === 'box' ? finals[i] : finals[i].simplify(0.001);
     if (g.kind !== 'box') finals[i].delete();
     return { ...g, cs };
   });
@@ -345,7 +438,13 @@ function placedSil(f, s) {
 function placedForExport(f, s) {
   const base = baseArt(f, s), E = 0.5, clip = rectCS(-f.w / 2 - E, -f.h / 2 - E, f.w / 2 + E, f.h / 2 + E);
   const place = cs => { const m = cs.translate([s.dx, s.dy]), cut = m.intersect(clip); m.delete(); return cut; };
-  const out = { pocket: place(base.sil), groups: base.groups.map(g => ({ ...g, cs: place(g.cs) })) };
+  // Multi-color: separate neighboring colors by 0.008 mm (shrink then grow 0.004) so every part is a clean solid;
+  // this also splits shapes touching at a single point. The pocket itself stays one closed outline.
+  const separate = cs => { const a = cs.offset(-0.004, 'Miter', 2), b = a.offset(0.004, 'Miter', 2), c = b.simplify(0.0001); a.delete(); b.delete(); return c; };
+  const out = { pocket: place(base.sil), groups: base.groups.map(g => {
+    if (!s.multi) return { ...g, cs: place(g.cs) };
+    const sep = separate(g.cs), cs = place(sep); sep.delete(); return { ...g, cs };
+  }) };
   clip.delete();
   return out;
 }
@@ -380,7 +479,7 @@ const fillL = new THREE.DirectionalLight(0xffffff, 0.5); fillL.position.set(-150
 // Box coords -> view coords: viewer's right = -x, up = -y, toward viewer = +z (180° about z)
 const root = new THREE.Group(); root.rotation.z = Math.PI; root.position.z = -36; scene.add(root);
 const inner = new THREE.Group(); root.add(inner);
-const boxMat = new THREE.MeshStandardMaterial({ color: 0xd9d4c7, roughness: 0.75, metalness: 0 });
+const boxMat = new THREE.MeshStandardMaterial({ color: '#d9d4c7', roughness: 0.75, metalness: 0 });
 const ghostMat = new THREE.MeshBasicMaterial({ color: 0xb4532a, transparent: true, opacity: 0.18, depthWrite: false, side: THREE.DoubleSide });
 const partMats = {};
 const partMat = c => partMats[c] || (partMats[c] = new THREE.MeshStandardMaterial({ color: c, roughness: 0.55 }));
@@ -456,10 +555,10 @@ function refreshDecal(f) {
     clearDecal(f.id);
     const grp = new THREE.Group(); grp.position.z = 0.02;
     for (const g of base.groups) {
-      const solid = g.cs.extrude(0.12), mesh = new THREE.Mesh(meshToGeo(solid.getMesh()), matFor(f, g.key)); solid.delete();
+      const mesh = new THREE.Mesh(flatGeo(g.cs), matFor(f, g.key)); mesh.position.z = 0.12;
       mesh.userData = { face: f.id, group: g.key }; grp.add(mesh);
     }
-    const gs = base.sil.extrude(0.01), ghost = new THREE.Mesh(meshToGeo(gs.getMesh()), ghostMat); gs.delete();
+    const ghost = new THREE.Mesh(flatGeo(base.sil), ghostMat);
     ghost.position.z = 0.3; ghost.userData = { face: f.id };
     grp.userData = { face: f.id, key: s._key, rot: s.rot, scale: s.scale, bx: base.bx, by: base.by };
     movers[f.id].add(grp, ghost); decals[f.id] = grp; ghosts[f.id] = ghost;
@@ -622,7 +721,8 @@ function renderEditor() {
   $('#modeWrap').hidden = s.multi; $('#weightRow').hidden = s.multi; $('#colorsPanel').hidden = !s.multi;
   document.querySelectorAll('.mode button').forEach(b => { b.classList.toggle('on', b.dataset.mode === s.mode); b.setAttribute('aria-pressed', b.dataset.mode === s.mode); });
   $('#inlayRow').hidden = s.multi || s.mode !== 'inlay';
-  $('#inlayColor').value = s.color;
+  $('#inlaySlot').innerHTML = palette.slots.map((c, i) => `<option value="${slotKey(i)}" ${(s.slot || 'c1') === slotKey(i) ? 'selected' : ''}>${slotLabel(i)} (${c})</option>`).join('');
+  $('#inlaySwatch').style.background = palette.slots[slotIdx(s.slot || 'c1')];
   const anyInlay = groupSpecs(s).some(g => g.kind === 'inlay' && g.hexes.length);
   $('#depthLabel').textContent = anyInlay ? 'Inlay depth' : 'Depth';
   $('#swapNote').textContent = swapNote(f, s); $('#swapNote').hidden = !anyInlay;
@@ -630,55 +730,92 @@ function renderEditor() {
   syncSliders();
 }
 
+/* ---------- Print colors (global palette) ---------- */
+function renderPalette() {
+  const usage = i => FACES.filter(f => state[f.id] && groupSpecs(state[f.id]).some(g => g.key === slotKey(i) && g.hexes.length)).map(f => f.name.replace(' side', '').replace('Top plate', 'Top'));
+  const boxCount = FACES.filter(f => state[f.id]).length;
+  const cell = (id, color, title, sub) => `<label class="pslot"><input type="color" data-slot="${id}" value="${color}" aria-label="${title} color"><span class="pt">${title}</span><small>${sub}</small></label>`;
+  $('#pslots').innerHTML = cell('box', palette.box, '1 · Box', palette.boxSet ? 'box filament' : 'set to match')
+    + palette.slots.map((c, i) => { const u = usage(i); return cell(i, c, String(i + 2), u.length ? u.join(', ') : palette.active.has(i) ? 'unused' : 'empty'); }).join('');
+  $('#pslots').querySelectorAll('.pslot').forEach((el, k) => el.classList.toggle('empty', k > 0 && !palette.active.has(k - 1)));
+  $('#pslots').querySelectorAll('input').forEach(inp => {
+    inp.addEventListener('input', () => {
+      if (inp.dataset.slot === 'box') { palette.box = inp.value; palette.boxSet = true; boxMat.color.set(inp.value); }
+      else { palette.slots[+inp.dataset.slot] = inp.value; palette.active.add(+inp.dataset.slot); }
+      if (cutMode) setCutMode(false);
+      FACES.forEach(styleDecal);
+    });
+    inp.addEventListener('change', async () => {
+      // A new box color can turn matching design colors into "box"; slot edits only recolor.
+      if (inp.dataset.slot === 'box') { for (const f of FACES) { const s = state[f.id]; if (s?.multi) mapToPalette(s); } }
+      await paletteChanged();
+    });
+  });
+}
+// After the palette or any face's mapping changed: rebuild what changed, recolor everything, refresh the UI.
+async function paletteChanged() {
+  if (cutMode) setCutMode(false);
+  const rebuild = FACES.filter(f => { const s = state[f.id]; return s && artKey(s) !== s._key; });
+  const work = () => { rebuild.forEach(refreshDecal); FACES.forEach(styleDecal); };
+  if (rebuild.length) await withBusy('Matching colors across faces…', work); else work();
+  renderPalette(); renderList(); renderEditor();
+}
+$('#autoPalette').onclick = async () => {
+  for (const f of FACES) { const s = state[f.id]; if (s?.multi) resetFaceColors(s); }
+  autoPalette();
+  await paletteChanged();
+  toast('Print colors re-matched across all faces.');
+};
+
 /* ---------- Colors panel (multi-color SVGs) ---------- */
 function renderColors() {
   const f = faceById(selected), s = state[f.id]; if (!s?.multi) return;
   const specs = groupSpecs(s), n = s.layers.length;
-  $('#colorsSummary').textContent = `${n} color${n > 1 ? 's' : ''} in this design${s._merged ? ` · merged to ${s.nFil} filament${s.nFil > 1 ? 's' : ''}` : ''}`;
-  const free = s.layers.filter(l => !['box', 'engrave'].includes(s.assign[l.hex] || 'box')).length;
-  $('#filCount').textContent = s.nFil; $('#filMinus').disabled = s.nFil <= 1; $('#filPlus').disabled = s.nFil >= Math.min(MAX_FILAMENTS, free);
+  const used = specs.filter(g => g.kind === 'inlay' && g.hexes.length).length;
+  const boxN = specs.find(g => g.key === 'box').hexes.length, engN = specs.find(g => g.key === 'engrave').hexes.length;
+  const bits = [`${n} color${n > 1 ? 's' : ''}`, `${used} print color${used === 1 ? '' : 's'}`];
+  if (boxN) bits.push(`${boxN} as box`);
+  if (engN) bits.push(`${engN} engrave only`);
+  $('#colorsSummary').textContent = bits.join(' · ');
   $('#speck').value = s.speck; $('#speckNum').value = (+s.speck).toFixed(1);
-  const options = [...specs.filter(g => g.kind === 'inlay').map(g => [g.key, g.label]), ['box', 'Box color (skip)'], ['engrave', 'Engrave only']];
+  const options = [...specs.filter(g => g.kind === 'inlay').map(g => [g.key, `${g.label} (${g.color})`]), ['box', 'Box color (skip)'], ['engrave', 'Engrave only']];
   const row = l => `<div class="crow"><i class="sw" style="background:${l.hex}"></i><span class="chex">${l.hex}</span><span class="cpct">${(l.area * 100).toFixed(l.area < 0.01 ? 1 : 0)}%</span>
     <select data-hex="${l.hex}" aria-label="Where ${l.hex} goes">${options.map(([k, t]) => `<option value="${k}" ${(s.assign[l.hex] || 'box') === k ? 'selected' : ''}>${t}</option>`).join('')}</select></div>`;
-  $('#colorGroups').innerHTML = specs.filter(g => g.hexes.length || g.kind === 'inlay').map(g => {
+  $('#colorGroups').innerHTML = specs.filter(g => g.hexes.length).map(g => {
     const members = s.layers.filter(l => g.hexes.includes(l.hex));
     const head = g.kind === 'inlay'
-      ? `<div class="ghead"><input type="color" class="gcolor" data-key="${g.key}" value="${g.color}" aria-label="${g.label} preview color"><b>${g.label}</b>
+      ? `<div class="ghead"><i class="sw" style="background:${g.color}"></i><b>${g.label}</b>
          <label class="gw">Line weight <input type="number" class="gweight" data-key="${g.key}" step="0.05" value="${(+g.weight).toFixed(2)}"> mm</label></div>`
-      : `<div class="ghead"><i class="sw ${g.kind}"></i><b>${g.label}</b><span class="gnote">${g.kind === 'box' ? 'not printed separately' : 'cut, no filament'}</span></div>`;
-    return `<div class="cgroup" data-group="${g.key}">${head}${members.map(row).join('') || '<p class="gempty">No colors assigned</p>'}</div>`;
+      : `<div class="ghead"><i class="sw ${g.kind}" ${g.kind === 'box' ? `style="background:${palette.box}"` : ''}></i><b>${g.kind === 'box' ? 'Slot 1 · Box color' : g.label}</b><span class="gnote">${g.kind === 'box' ? 'the box shows through' : 'cut, no filament'}</span></div>`;
+    return `<div class="cgroup" data-group="${g.key}">${head}${members.map(row).join('')}</div>`;
   }).join('');
-  $('#colorGroups').querySelectorAll('select').forEach(sel => sel.onchange = () => { s.assign[sel.dataset.hex] = sel.value; s._merged = false; colorsChanged(); });
-  $('#colorGroups').querySelectorAll('.gcolor').forEach(inp => inp.addEventListener('input', () => {
-    s.fils[+inp.dataset.key.slice(1) - 1].color = inp.value; styleDecal(f);
-    clearTimeout(settleTimer); settleTimer = setTimeout(() => updateChip(f), 150);
-  }));
+  $('#colorGroups').querySelectorAll('select').forEach(sel => sel.onchange = () => {
+    if (!s.manual) s.manual = {};
+    s.manual[sel.dataset.hex] = true; s.assign[sel.dataset.hex] = sel.value; colorsChanged();
+  });
   $('#colorGroups').querySelectorAll('.gweight').forEach(inp => inp.addEventListener('change', () => {
-    const v = +inp.value; if (!isFinite(v)) return; s.fils[+inp.dataset.key.slice(1) - 1].weight = Math.max(-1, Math.min(2, v)); colorsChanged(false);
+    const v = +inp.value; if (!isFinite(v)) return; s.weights = { ...s.weights, [inp.dataset.key]: Math.max(-1, Math.min(2, v)) }; colorsChanged(false);
   }));
 }
-function colorsChanged(rerender = true) {
+async function colorsChanged(rerender = true) {
   const f = faceById(selected);
   if (rerender) renderColors();
   if (cutMode) setCutMode(false);
-  refreshDecal(f); updateWarnings(); updateChip(f);
+  await withBusy('Updating colors…', () => { refreshDecal(f); updateWarnings(); updateChip(f); });
   const s = state[f.id];
   const anyInlay = groupSpecs(s).some(g => g.kind === 'inlay' && g.hexes.length);
   $('#swapNote').textContent = swapNote(f, s); $('#swapNote').hidden = !anyInlay;
-  $('#build').textContent = buildLabel();
+  $('#build').textContent = buildLabel(); renderPalette();
 }
 function flashGroup(key) {
   const el = document.querySelector(`.cgroup[data-group="${key}"]`); if (!el) return;
   el.scrollIntoView({ block: 'nearest', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
   el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
 }
-$('#filMinus').onclick = () => { const s = state[selected]; if (!s?.multi || s.nFil <= 1) return; autoAssign(s, s.nFil - 1); s._merged = true; colorsChanged(); };
-$('#filPlus').onclick = () => { const s = state[selected]; if (!s?.multi || s.nFil >= MAX_FILAMENTS) return; autoAssign(s, s.nFil + 1); s._merged = s.layers.length > s.nFil; colorsChanged(); };
-$('#autoColors').onclick = () => {
+$('#autoColors').onclick = async () => {
   const s = state[selected]; if (!s?.multi) return;
-  s.assign = {}; const bg = detectBackground(s.layers, s.rw, s.rh); if (bg) s.assign[bg] = 'box';
-  autoAssign(s, MAX_FILAMENTS); s._merged = s.layers.filter(l => s.assign[l.hex] !== 'box').length > s.nFil; colorsChanged();
+  resetFaceColors(s);
+  mapToPalette(s); colorsChanged();
 };
 const setSpeck = v => { const s = state[selected]; if (!s?.multi || !isFinite(v)) return; s.speck = Math.max(0, Math.min(5, v)); $('#speckNum').value = s.speck.toFixed(1); $('#speck').value = s.speck;
   clearTimeout(settleTimer); settleTimer = setTimeout(() => colorsChanged(false), 250); };
@@ -718,34 +855,40 @@ function setArt(id, fileName, text, scale = DEFAULT_SCALE) {
   const r = parseSVG(text);
   const old = state[id];
   const s = { uid: ++artCounter, fileName, svgText: text, layers: r.layers, rw: r.rw, rh: r.rh, scale, dx: 0, dy: 0, rot: 0, depth: f.depth, weight: 0,
-    mode: old?.mode || 'engrave', color: old?.color || INLAY_COLORS[FACES.indexOf(f) % INLAY_COLORS.length], multi: false, speck: 0 };
+    mode: old?.mode || 'engrave', slot: old?.slot || 'c1', multi: false, speck: 0 };
   if (r.layers.length > 1) {
-    // Multi-color: background becomes box color, the rest is merged down to the AMS slot count.
-    s.multi = true; s.speck = 0.3; s.assign = {};
-    const bg = detectBackground(r.layers, r.rw, r.rh); if (bg) s.assign[bg] = 'box';
-    autoAssign(s, MAX_FILAMENTS);
-    s._merged = r.layers.filter(l => s.assign[l.hex] !== 'box').length > s.nFil;
+    // Multi-color: a detected background becomes box color; the rest is matched to the shared print colors.
+    s.multi = true; s.speck = 0.3; s.weights = {}; s.bg = detectBackground(r.layers, r.rw, r.rh);
+    resetFaceColors(s);
     s.depth = Math.max(f.depth, Math.min(0.6, f.wall - 0.45));   // inlays look solid at ~3 layers
   }
   state[id] = s;
   if (old) disposeArt(old);
+  if (s.multi) addDesignToPalette(f, s);
   return r;
 }
 async function loadFile(id, file) {
   try {
     if (!/\.svg$/i.test(file.name) && file.type !== 'image/svg+xml') throw new Error(`${file.name} isn't an SVG file.`);
-    const r = setArt(id, file.name, await file.text());
-    if (cutMode) setCutMode(false);
+    const text = await file.text();
+    const paths = (text.match(/<(path|rect|circle|ellipse|polygon|polyline|line)\b/g) || []).length;
+    let r;
+    await withBusy(`Reading ${file.name}${paths > 200 ? ` (${paths} shapes)` : ''}…`, async () => {
+      r = setArt(id, file.name, text);
+      if (cutMode) setCutMode(false);
+      FACES.forEach(refreshDecal); FACES.forEach(styleDecal);   // auto colors may have shifted on other faces too
+    });
     const s = state[id], notes = [];
     if (s.multi) {
       const bg = Object.values(s.assign).includes('box');
-      notes.push(`${r.layers.length} colors found${s._merged ? `, merged to ${s.nFil} filaments` : ''}${bg ? ', background set to box color' : ''}`);
+      const used = new Set(Object.values(s.assign).filter(v => v[0] === 'c')).size;
+      notes.push(`${r.layers.length} colors found, matched to ${used} print color${used === 1 ? '' : 's'}${bg ? ', background set to box color' : ''}`);
     }
     if (r.gradients) notes.push('gradients flattened to one color');
+    if (r.unknown.length) notes.push(`ignored unrecognized color${r.unknown.length > 1 ? 's' : ''} ${r.unknown.slice(0, 3).map(c => `"${c}"`).join(', ')}`);
     if (r.skippedOutlines) notes.push(`skipped ${r.skippedOutlines} empty path(s)`);
     toast(`Loaded ${file.name} on the ${faceById(id).name.toLowerCase()}${notes.length ? ': ' + notes.join('; ') : ''}.`);
-    refreshDecal(faceById(id));
-    select(id);
+    select(id); renderPalette();
   } catch (e) { toast(e.message, true); }
 }
 
@@ -757,9 +900,10 @@ function liveUpdate(delay = 180) {
   const f = faceById(selected);
   updateTransform(f); styleDecal(f); syncControls();
   clearTimeout(settleTimer);
-  settleTimer = setTimeout(() => {
-    refreshDecal(f); syncControls(); updateWarnings(); updateChip(f);
-    const s = state[f.id]; if (s) { $('#swapNote').textContent = swapNote(f, s); }
+  settleTimer = setTimeout(async () => {
+    const s = state[f.id];
+    const rebuild = () => { refreshDecal(f); syncControls(); updateWarnings(); updateChip(f); if (state[f.id]) $('#swapNote').textContent = swapNote(f, state[f.id]); };
+    if (s?.multi && artKey(s) !== s._key) await withBusy('Updating colors…', rebuild); else rebuild();
   }, delay);
 }
 const scheduleRefresh = () => liveUpdate(0);
@@ -780,7 +924,7 @@ for (const k of FIELDS) {
 $('#reset').onclick = () => {
   const f = faceById(selected), s = state[f.id]; if (!s) return;
   Object.assign(s, { scale: DEFAULT_SCALE, dx: 0, dy: 0, rot: 0, weight: 0, depth: s.multi ? Math.max(f.depth, Math.min(0.6, f.wall - 0.45)) : f.depth });
-  if (s.multi) s.fils.forEach(x => x.weight = 0);
+  if (s.multi) s.weights = {};
   renderEditor(); liveUpdate(0);
 };
 document.querySelectorAll('.rot button').forEach(b => b.onclick = () => {
@@ -791,12 +935,13 @@ $('#fitBtn').onclick = () => { const s = state[selected]; if (!s) return; s.scal
 $('#remove').onclick = () => {
   const s = state[selected]; if (!s) return; disposeArt(s); delete state[selected];
   if (cutMode) setCutMode(false);
-  refreshDecal(faceById(selected)); renderList(); renderEditor();
+  refreshDecal(faceById(selected));
+  renderList(); renderEditor(); renderPalette();   // print colors stay as they are
 };
 document.querySelectorAll('.mode button').forEach(b => b.onclick = () => {
-  const s = state[selected]; if (!s) return; s.mode = b.dataset.mode; renderEditor(); scheduleRefresh(); updateChip(faceById(selected)); $('#build').textContent = buildLabel();
+  const s = state[selected]; if (!s) return; s.mode = b.dataset.mode; if (s.mode === 'inlay') palette.active.add(slotIdx(s.slot || 'c1')); renderEditor(); scheduleRefresh(); updateChip(faceById(selected)); $('#build').textContent = buildLabel(); renderPalette();
 });
-$('#inlayColor').addEventListener('input', e => { const s = state[selected]; if (!s) return; s.color = e.target.value; styleDecal(faceById(selected)); clearTimeout(settleTimer); settleTimer = setTimeout(() => updateChip(faceById(selected)), 150); });
+$('#inlaySlot').addEventListener('change', e => { const s = state[selected]; if (!s) return; s.slot = e.target.value; palette.active.add(slotIdx(s.slot)); $('#inlaySwatch').style.background = palette.slots[slotIdx(s.slot)]; scheduleRefresh(); updateChip(faceById(selected)); renderPalette(); });
 $('#pick').onclick = () => $('#file').click();
 $('#file').onchange = e => { const file = e.target.files[0]; if (file) loadFile(selected, file); e.target.value = ''; };
 view.addEventListener('dragover', e => { e.preventDefault(); view.classList.add('drag'); });
@@ -813,6 +958,14 @@ document.addEventListener('keydown', e => {   // arrow keys nudge the selected d
   e.preventDefault(); s.dx = +(s.dx + m[0]).toFixed(1); s.dy = +(s.dy + m[1]).toFixed(1); liveUpdate();
 });
 
+// Busy indicator: shown before heavy work, after letting the browser paint it.
+const nextPaint = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+let busyDepth = 0;
+async function withBusy(msg, fn) {
+  busyDepth++; $('#busyMsg').textContent = msg; $('#busy').hidden = false;
+  await nextPaint();
+  try { return await fn(); } finally { if (--busyDepth === 0) $('#busy').hidden = true; }
+}
 let toastTimer;
 function toast(msg, bad) {
   const t = $('#toast'); t.textContent = msg; t.className = bad ? 'bad' : ''; t.hidden = false;
@@ -842,8 +995,8 @@ function buildModel() {
   const body = boxManifold.subtract(all).simplify(0.001);   // drop sub-micron slivers so the mesh stays watertight
   all.delete();
   // Colors on the same face are already separate. Parts from different faces can meet at a corner, so each face's
-  // parts give way to earlier faces' parts there.
-  const parts = []; let taken = null, faceTaken = null, curFace = null;
+  // parts give way to earlier faces' parts there. Then each print slot becomes one part across all faces.
+  const bySlot = new Map(); let taken = null, faceTaken = null, curFace = null;
   for (const { f, s, g, c } of inlays) {
     if (f !== curFace) {
       if (faceTaken) { const t = taken ? taken.add(faceTaken) : faceTaken.translate([0, 0, 0]); taken?.delete(); faceTaken.delete(); taken = t; faceTaken = null; }
@@ -852,11 +1005,15 @@ function buildModel() {
     let m = boxManifold.intersect(c);                          // only what is inside the box
     if (taken) { const t = m.subtract(taken); m.delete(); m = t; }
     const nf = faceTaken ? faceTaken.add(m) : m.translate([0, 0, 0]); faceTaken?.delete(); faceTaken = nf;
-    m = m.simplify(0.001);
-    const design = s.fileName.replace(/\.svg$/i, '');
-    const name = s.multi ? `${design} (${f.name}) - ${g.label} ${g.color}` : `${design} (${f.name})`;
-    if (!m.isEmpty()) parts.push({ name, color: g.color, man: m });
+    if (m.isEmpty()) { m.delete(); continue; }
+    const prev = bySlot.get(g.key);
+    if (prev) { const u = prev.man.add(m); prev.man.delete(); m.delete(); prev.man = u; prev.faces.push(f.name); }
+    else bySlot.set(g.key, { man: m, color: g.color, label: g.label, faces: [f.name] });
   }
+  const parts = [...bySlot.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, p]) => {
+    const man = p.man.simplify(0.001); p.man.delete();
+    return { name: `${p.label} ${p.color} (${[...new Set(p.faces)].join(', ')})`, color: p.color, man };
+  });
   taken?.delete(); faceTaken?.delete();
   cutters.forEach(c => c.delete()); inlays.forEach(x => x.c.delete());
   return { body, parts };
@@ -902,7 +1059,7 @@ function meshXML(id, name, mesh) {
 }
 async function write3MF(name, body, parts) {
   // One object made of several parts: slicers (Bambu Studio, OrcaSlicer, PrusaSlicer) load these as parts you can assign filaments to.
-  const objs = [meshXML(1, 'Box', body.getMesh())];
+  const objs = [meshXML(1, 'Slot 1 Box', body.getMesh())];
   parts.forEach((p, i) => objs.push(meshXML(i + 2, p.name, p.man.getMesh())));
   const groupId = parts.length + 2;
   const comps = [1, ...parts.map((_, i) => i + 2)].map(id => `<component objectid="${id}"/>`).join('');
@@ -993,7 +1150,7 @@ profSel.onchange = () => {
   for (const [id, file, text] of window.__SAMPLE__) { try { setArt(id, file, text); } catch (e) { console.warn(e); } }
   loadProfile(PROFILES[0]);
   resize(); lookAtFace(null, false);
-  select('left', false);
+  select('left', false); renderPalette();
   $('#viewmode').textContent = 'Preview: drag a design to move it · Shift+scroll to resize';
   document.body.classList.remove('loading');
 })().catch(e => { $('#loadingMsg').textContent = 'Could not start: ' + e.message; console.error(e); });

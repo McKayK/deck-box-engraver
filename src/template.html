@@ -139,6 +139,25 @@ body.loading #loading{display:grid}
 .crow select{font-size:13px;padding:4px 6px;width:100%}
 .swapnote{margin:0;font-size:13px;color:var(--muted)}
 .speckrow{grid-template-columns:86px 1fr 104px}
+.busy{position:absolute;left:50%;top:70px;transform:translateX(-50%);display:flex;align-items:center;gap:10px;background:var(--ink);color:var(--panel);font:500 14px var(--body);padding:9px 16px;border-radius:99px;box-shadow:0 6px 24px rgba(0,0,0,.2);z-index:6;max-width:calc(100% - 32px)}
+.spin{width:14px;height:14px;border-radius:50%;border:2px solid currentColor;border-right-color:transparent;animation:spin .8s linear infinite;flex:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation-duration:2.4s}}
+
+.palette{display:flex;flex-direction:column;gap:8px}
+.phead{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.phead .label{margin:0;display:flex;align-items:center;gap:8px}
+.pmode{font:500 11px var(--mono);letter-spacing:0;text-transform:none;color:var(--muted);border:1px solid var(--line);border-radius:99px;padding:1px 7px}
+.pslots{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+.pslot{display:flex;flex-direction:column;align-items:center;gap:3px;padding:7px 4px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2);cursor:pointer;min-width:0}
+.pslot input{width:100%;max-width:56px;height:30px;border:1px solid var(--line);border-radius:6px;padding:1px;background:var(--panel);cursor:pointer}
+.pslot .pt{font:600 13px var(--display)}
+.pslot small{font-size:11px;color:var(--muted);text-align:center;line-height:1.2;overflow-wrap:anywhere}
+.slotpick{display:flex;align-items:center;gap:8px}
+.slotpick select{font:500 14px var(--body);padding:5px 8px;border-radius:7px;border:1px solid var(--line);background:var(--panel-2);color:var(--ink)}
+.inlay{grid-template-columns:auto 1fr}
+.pslot.empty input{opacity:.35}
+.pslot.empty .pt{color:var(--muted)}
 </style>
 </head>
 <body class="loading">
@@ -150,12 +169,18 @@ body.loading #loading{display:grid}
     <div class="tools"><button class="b" id="overview">Full view</button><button class="b" id="backToEdit" hidden>Back to editing</button></div>
   </div>
   <div id="viewmode">Preview</div>
+  <div id="busy" class="busy" hidden role="status" aria-live="polite"><span class="spin" aria-hidden="true"></span><span id="busyMsg">Working…</span></div>
 </main>
 <aside>
   <div class="scroll">
     <section id="profileRow" class="profile" hidden>
       <label class="label" for="profile">Box model</label>
       <select id="profile"></select>
+    </section>
+    <section class="palette" aria-labelledby="paletteTitle">
+      <div class="phead"><p class="label" id="paletteTitle">Print colors</p><button class="b quiet" id="autoPalette">Auto-match</button></div>
+      <div class="pslots" id="pslots"></div>
+      <p class="cnote">4 AMS slots shared by every face: the box filament plus 3 design colors. The first design sets them; later designs match to them. Click a swatch to set your real filament.</p>
     </section>
     <section>
       <p class="label">Faces</p>
@@ -173,16 +198,13 @@ body.loading #loading{display:grid}
           <button class="b" data-mode="inlay" id="modeInlay">Color inlay</button>
         </div>
         <div id="inlayRow" class="inlay" hidden>
-          <label for="inlayColor">Preview color</label><input type="color" id="inlayColor">
+          <label for="inlaySlot">Print color</label><span class="slotpick"><i class="sw" id="inlaySwatch"></i><select id="inlaySlot"></select></span>
         </div>
         <div id="colorsPanel" class="colors" hidden>
           <div class="chead"><p class="label">Colors</p><span id="colorsSummary"></span></div>
           <div class="ctools">
-            <div class="stepper" role="group" aria-label="Number of filaments">
-              <span>Filaments</span>
-              <button class="b" id="filMinus" aria-label="Fewer filaments">−</button><b id="filCount">4</b><button class="b" id="filPlus" aria-label="More filaments">+</button>
-            </div>
-            <button class="b quiet" id="autoColors">Auto-assign</button>
+            <span class="cnote">Each color uses one of the shared print colors above.</span>
+            <button class="b quiet" id="autoColors">Reset this face</button>
           </div>
           <div class="row speckrow"><label for="speck">Specks</label><input type="range" id="speck" min="0" max="3" step="0.1"><span class="numbox"><input type="number" id="speckNum" step="0.1" min="0" inputmode="decimal" aria-label="Remove specks smaller than, in square millimeters"><span>mm²</span></span></div>
           <p class="cnote">Bits of color smaller than this are absorbed by the color around them. Click a color on the model to find it here.</p>
@@ -213,7 +235,7 @@ body.loading #loading{display:grid}
     <label for="deckName">File name</label>
     <input id="deckName" value="Deck Box - LOTR" autocomplete="off">
     <button id="build">Download STL</button>
-    <p class="hint">Drag a design on the model to move it. Shift+scroll resizes it, and arrow keys nudge it. Anything past the dashed face outline is trimmed off. Color inlays export as a .3mf with each color as its own part. Multi-color SVGs are split into up to 4 filaments automatically.</p>
+    <p class="hint">Drag a design on the model to move it. Shift+scroll resizes it, and arrow keys nudge it. Anything past the dashed face outline is trimmed off. Color inlays export as a .3mf with each color as its own part. All faces share the 4 print colors at the top: the box plus 3 design colors.</p>
   </div>
 </aside>
 <div id="toast" hidden></div>

@@ -17,22 +17,28 @@ Everything runs locally in the browser. The build produces **one self-contained 
 - **Warnings**: flags cuts that would leave less than 0.4 mm of wall, including the thin lid rail along the front edge of the sides (1.32 mm) and the back (1.05 mm).
 - **SVGs**: filled shapes and colored outlines both work (outlines are converted to filled shapes). Gradients are flattened to one color. SVGs that only contain an embedded picture can't be engraved; trace them first (Inkscape: *Path → Trace Bitmap*).
 
+### Print colors (shared palette)
+
+The whole box prints from **4 AMS slots**: slot 1 is the box filament, slots 2–4 are design colors. Every face uses the same palette, shown under **Print colors** at the top of the panel.
+
+- **Auto** (default): the 3 design colors are picked from all faces together, weighted by how much printed area each color covers, and every design color is matched to one of them. Loading or removing a design re-matches.
+- **Click a swatch** to set a slot to your real filament color. Editing a design slot switches to **Manual**: new designs are then matched to your colors instead of changing them. **Auto-match** goes back to automatic.
+- **Box color**: once you set it, design colors that closely match the box filament are left as box (the box shows through).
+- Single-color inlays pick one of the 3 design slots.
+- The export has **one part per slot** across all faces (for example `Slot 3 #cc8340 (Left side, Back)`), plus the box as `Slot 1 Box`, so each slot is assigned once in the slicer.
+
 ### Multi-color SVGs
 
-When an SVG has more than one fill color, the Engrave / Color inlay switch is replaced by a **Colors** panel:
+When an SVG has more than one fill color, the Engrave / Color inlay switch is replaced by a **Colors** panel for that face:
 
-- **Automatic setup**: a background color (one that covers most of the design's edge) is set to *Box color*, and the remaining colors are merged down to **4 filaments** by combining the most similar colors.
-- **Filaments − / +**: merge into fewer filaments, or split back out (up to 4). **Auto-assign** redoes the automatic setup.
-- **Each color** can be moved to any filament, to *Box color (skip)*, or to *Engrave only* (cut, no filament).
-- **Each filament** has a preview color and its own **line weight**. A thickened color wins over its neighbors; a thinned one gives its space to them.
+- **Background**: a color covering most of the design's edge is set to *Box color*.
+- **Each color** can be moved to any print slot, to *Box color (skip)*, or to *Engrave only*. **Reset this face** undoes manual choices.
+- **Line weight per slot**: a thickened color wins over its neighbors; a thinned one gives its space to them.
 - **Specks**: color islands smaller than this area (mm²) are absorbed by the surrounding color. Hairline seams between colors are closed the same way.
-- **Click a color on the model** to jump to its filament in the panel.
-- Stacked shapes are resolved like the SVG draws them: shapes later in the file cover earlier ones.
-- The export has one part per filament per face (for example `jace (Back) - Filament 2 #054a72`).
+- **Click a color on the model** to jump to it in the panel.
+- Stacked shapes are resolved like the SVG draws them: shapes later in the file cover earlier ones. Large traced files (hundreds of shapes) take a few seconds; a progress message shows while they load.
 
-Upright faces (sides, top, bottom) need a filament change per color on every layer through the design; the back prints flat, so colors only change in its first few layers. The panel notes this for each face.
-
-In Bambu Studio, opening an inlay 3MF shows "invalid config, load geometry data only". That's expected for any 3MF not saved by Bambu. Click OK, expand the object in the list, and assign a filament to each inlay part.
+Upright faces (sides, top, bottom) need a filament change per color on every layer through the design; the back and the detail-top plate print flat, so colors only change in their first few layers. The panel notes this for each face.
 
 ## Box models
 
@@ -65,7 +71,7 @@ samples/             SVGs: the four LOTR designs preload on first open; jace.svg
 docs/index.html      Built output (committed so GitHub Pages can serve it)
 Dockerfile           Two-stage build: node builds the page, nginx serves it
 nginx.conf           Container's nginx config (gzip, no-cache)
-docker-compose.yml   Runs the container on port 8090
+docker-compose.yml   Runs the container on the npm-network (Nginx Proxy Manager)
 ```
 
 ## How it works
@@ -84,28 +90,26 @@ Each profile's `faces` table is in the box's own coordinates (the top loader lie
 
 The image builds the app, then serves the single HTML file with nginx (gzip on, about 2 MB down to under 1 MB over the wire). No Node at runtime.
 
+The container joins the existing **`npm-network`** Docker network (Nginx Proxy Manager's) on every `docker compose up`, so it never needs re-linking after a rebuild. That network must already exist; compose won't create it.
+
 ```bash
-docker compose up -d --build     # serves on http://<server>:8090
+docker compose up -d --build
 ```
 
 After changing the code or SVG samples, run the same command again to rebuild and restart.
 
-Behind an existing Nginx reverse proxy, add a server block pointing at the container:
+In Nginx Proxy Manager, the proxy host forwards to:
 
-```nginx
-server {
-    listen 443 ssl;
-    server_name engraver.example.com;
-    # ssl_certificate / ssl_certificate_key: same as your other sites
+- **Forward hostname:** `deck-box-engraver` (the container name, which stays the same across rebuilds)
+- **Forward port:** `80`
+- **Scheme:** `http`
 
-    location / {
-        proxy_pass http://127.0.0.1:8090;
-        proxy_set_header Host $host;
-    }
-}
+There's no published host port. To also open it directly at `http://<server>:8090`, add this under the service in `docker-compose.yml`:
+
+```yaml
+    ports:
+      - "8090:80"
 ```
-
-If the proxy itself runs in Docker on a shared network, drop the `ports:` mapping in `docker-compose.yml`, join that network, and use `proxy_pass http://deck-box-engraver:80;` instead.
 
 ## Hosting on GitHub Pages
 
