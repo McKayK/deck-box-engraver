@@ -42,6 +42,18 @@ const PROFILES = [
           .map(r => ({ r, wall: 0.8, what: 'the sloped edge of the top plate' })) },
       SIDE_FACES.bottom],
   },
+  {
+    // Just the sliding front lid, printed art side (its narrow face) down. Converted from the source file, which was
+    // in centimeters, and flipped so the narrow face sits on the bed. The preview slides it into a ghosted standard
+    // box (context only, never exported). Print pose -> installed: x_box = -y, y_box = -x - 0.9565, z_box = 72.254 - z.
+    id: 'art-lid', name: 'Art front lid (slides into the top loader)', stl: 'art-front-lid.stl',
+    context: 'top-loader.stl',
+    pieces: [{ select: () => true, matrix: [0, -1, 0, 0,  -1, 0, 0, 0,  0, 0, -1, 0,  0, -0.9565, 72.254, 1] }],
+    faces: [
+      { id: 'front', name: 'Front (lid)', piece: 0, N: [0, 0, -1], U: [1, 0, 0], c: [0.625, 0, 0], w: 73.6, h: 99.46,
+        wall: 3.302, depth: 1.0, thin: [] },
+    ],
+  },
 ];
 
 const DEFAULT_SCALE = 85;
@@ -483,7 +495,8 @@ const boxMat = new THREE.MeshStandardMaterial({ color: '#d9d4c7', roughness: 0.7
 const ghostMat = new THREE.MeshBasicMaterial({ color: 0xb4532a, transparent: true, opacity: 0.18, depthWrite: false, side: THREE.DoubleSide });
 const partMats = {};
 const partMat = c => partMats[c] || (partMats[c] = new THREE.MeshStandardMaterial({ color: c, roughness: 0.55 }));
-let boxMesh, cutMode = false, cutParts = [];
+let boxMesh, contextMesh = null, cutMode = false, cutParts = [];
+const contextMat = new THREE.MeshStandardMaterial({ color: '#d9d4c7', roughness: 0.8, transparent: true, opacity: 0.35, depthWrite: false });
 const decals = {}, ghosts = {}, frames = {};
 
 function resize() {
@@ -740,7 +753,7 @@ function renderPalette() {
   $('#pslots').querySelectorAll('.pslot').forEach((el, k) => el.classList.toggle('empty', k > 0 && !palette.active.has(k - 1)));
   $('#pslots').querySelectorAll('input').forEach(inp => {
     inp.addEventListener('input', () => {
-      if (inp.dataset.slot === 'box') { palette.box = inp.value; palette.boxSet = true; boxMat.color.set(inp.value); }
+      if (inp.dataset.slot === 'box') { palette.box = inp.value; palette.boxSet = true; boxMat.color.set(inp.value); contextMat.color.set(inp.value); }
       else { palette.slots[+inp.dataset.slot] = inp.value; palette.active.add(+inp.dataset.slot); }
       if (cutMode) setCutMode(false);
       FACES.forEach(styleDecal);
@@ -1118,6 +1131,7 @@ function loadProfile(p) {
     Object.values(groupMats[f.id] || {}).forEach(m => m.dispose());
   }
   if (boxMesh) { inner.remove(boxMesh); boxMesh.geometry.dispose(); }
+  if (contextMesh) { inner.remove(contextMesh); contextMesh.geometry.dispose(); contextMesh = null; }
   if (boxManifold) boxManifold.delete();
   cutParts.forEach(m => { inner.remove(m); m.geometry.dispose(); }); cutParts = []; cutMode = false;
   profile = p;
@@ -1128,6 +1142,10 @@ function loadProfile(p) {
   boxManifold = toManifold(parseSTL(b64(stl).buffer));
   boxGeo = displayGeo(boxManifold.getMesh());
   boxMesh = new THREE.Mesh(boxGeo, boxMat); inner.add(boxMesh);
+  if (p.context) {   // e.g. the box a lid slides into: shown ghosted for context, never cut or exported
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(parseSTL(b64(window.__BOXES__[p.context]).buffer), 3));
+    g.computeVertexNormals(); contextMesh = new THREE.Mesh(g, contextMat); contextMesh.renderOrder = 2; inner.add(contextMesh);
+  }
   FACES.forEach(drawFrame); FACES.forEach(initFaceGroup);
   FACES.forEach(refreshDecal);
   if (!faceById(selected)) selected = FACES[0].id;

@@ -49,7 +49,9 @@ Included models:
 - **Top loader** (`assets/top-loader.stl`): the standard box, printed on its back.
 - **Top loader, detail top** (`assets/top-loader-detail-top.stl`): the top is a separate plate (74.3 × 65.3 × 2.4 mm) printed art-side down on the build plate for sharper detail, then glued into a matching pocket in the top. Its **Top plate** face is that plate's bed-side face, so top designs print directly against the bed, and multi-color there only changes filament for the first few layers. The preview shows the plate installed in its pocket; the export keeps it lying flat beside the box, as in the STL.
 
-To add a box: drop its STL in `assets/`, add a profile with its faces (see *Face geometry* below), and rebuild. Every STL in `assets/` is embedded automatically. A separately printed piece can be shown installed in the preview with a profile's `pieces` entry (which vertices belong to it, and a 4×4 matrix from print position to installed position); faces on that piece set `piece: <index>`.
+- **Art front lid** (`assets/art-front-lid.stl`): only the sliding front lid that goes in the top-loader slot, printed with its narrow outer face (the art side) down on the bed. The source file was in centimeters; the asset is converted to mm and flipped art-side down. The preview shows it slid into a ghosted standard box for context; the export is just the lid.
+
+To add a box: drop its STL in `assets/`, add a profile with its faces (see *Face geometry* below), and rebuild. Every STL in `assets/` is embedded automatically. A profile's `context` STL is drawn ghosted in the preview but never cut or exported. A separately printed piece can be shown installed in the preview with a profile's `pieces` entry (which vertices belong to it, and a 4×4 matrix from print position to installed position); faces on that piece set `piece: <index>`.
 
 ## Building
 
@@ -66,7 +68,7 @@ Requires Node 18+.
 src/main.js          App code: scene, SVG parsing, placement, drag, build, STL/3MF writers
 src/template.html    Page markup and CSS, with %%PLACEHOLDERS%% the build fills in
 build.mjs            esbuild bundle + inlining into docs/index.html
-assets/              Deck box models (STL), one per profile: top-loader.stl, top-loader-detail-top.stl
+assets/              Models (STL), one per profile: top-loader.stl, top-loader-detail-top.stl, art-front-lid.stl
 samples/             SVGs: the four LOTR designs preload on first open; jace.svg and uncle-iroh.svg are multi-color test files
 docs/index.html      Built output (committed so GitHub Pages can serve it)
 Dockerfile           Two-stage build: node builds the page, nginx serves it
