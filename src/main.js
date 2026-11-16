@@ -24,6 +24,10 @@ const SIDE_FACES = {
 // print layout). Plate coords -> installed: x stays, plate z -> box y (wide face flush at y = -51.82), plate y -> -z.
 const PW = 74.273, PH = 65.295, PE = 1.2;   // plate wide-face size; sloped-edge strip width
 const PLATE = { cx: -0.0635, cy: -94.6274, z: -0.254, t: 2.413 };
+// Side plates (detail top + sides model): wide face 68.41 x 98.7 mm, 1.27 mm thick, 45-degree edges.
+const SW = 68.41, SH = 98.7, SE = 1.0;
+const sideEdges = () => [[-SW / 2, -SH / 2, -SW / 2 + SE, SH / 2], [SW / 2 - SE, -SH / 2, SW / 2, SH / 2], [-SW / 2, -SH / 2, SW / 2, -SH / 2 + SE], [-SW / 2, SH / 2 - SE, SW / 2, SH / 2]]
+  .map(r => ({ r, wall: 0.6, what: 'the sloped edge of the side plate' }));
 const PROFILES = [
   {
     id: 'standard', name: 'Top loader', stl: 'top-loader.stl',
@@ -41,6 +45,27 @@ const PROFILES = [
         thin: [[-PW / 2, -PH / 2, -PW / 2 + PE, PH / 2], [PW / 2 - PE, -PH / 2, PW / 2, PH / 2], [-PW / 2, -PH / 2, PW / 2, -PH / 2 + PE], [-PW / 2, PH / 2 - PE, PW / 2, PH / 2]]
           .map(r => ({ r, wall: 0.8, what: 'the sloped edge of the top plate' })) },
       SIDE_FACES.bottom],
+  },
+  {
+    // Top AND both sides are separate plates, each printed wide (outer) face down, then glued into pockets. This STL sits
+    // 0.254 mm higher than the others (z starts at 0), so the box faces are shifted to match. Side plates are 1.27 mm
+    // thick, so side designs default to 0.6 mm deep. Preview-only `pieces` move each plate into its pocket.
+    id: 'detail-all', name: 'Top loader, detail top + sides (glued-in plates)', stl: 'top-loader-detail-all.stl',
+    pieces: [
+      { select: (x, y) => y < -56 && Math.abs(x) < 45, matrix: [1, 0, 0, 0,  0, 0, -1, 0,  0, 1, 0, 0,  0.0635, -51.82, -59.376, 1] },
+      { select: x => x > 45,  matrix: [0, 0, 1, 0,  0, 1, 0, 0,  -1, 0, 0, 0,  39.67, 0, -46.02, 1] },
+      { select: x => x < -45, matrix: [0, 0, -1, 0,  0, 1, 0, 0,  1, 0, 0, 0,  -39.67, 0, -52.3695, 1] },
+    ],
+    faces: [
+      { id: 'left',  name: 'Left plate',  piece: 1, N: [0, 0, -1], U: [0, -1, 0], c: [82.765, 0, 0],   w: SW, h: SH, wall: 1.27, depth: 0.6, thin: sideEdges() },
+      { id: 'right', name: 'Right plate', piece: 2, N: [0, 0, -1], U: [0, -1, 0], c: [-89.1145, 0, 0], w: SW, h: SH, wall: 1.27, depth: 0.6, thin: sideEdges() },
+      { ...SIDE_FACES.back, c: [0, 0, 0] },
+      { id: 'top', name: 'Top plate', piece: 0, N: [0, 0, -1], U: [0, 1, 0], c: [PLATE.cx, PLATE.cy, 0], w: PW, h: PH,
+        wall: PLATE.t, depth: 1.0,
+        thin: [[-PW / 2, -PH / 2, -PW / 2 + PE, PH / 2], [PW / 2 - PE, -PH / 2, PW / 2, PH / 2], [-PW / 2, -PH / 2, PW / 2, -PH / 2 + PE], [-PW / 2, PH / 2 - PE, PW / 2, PH / 2]]
+          .map(r => ({ r, wall: 0.8, what: 'the sloped edge of the top plate' })) },
+      { ...SIDE_FACES.bottom, c: [0, Y, 36.429] },
+    ],
   },
   {
     // Just the sliding front lid, printed art side (its narrow face) down. Converted from the source file, which was
@@ -1138,6 +1163,13 @@ function loadProfile(p) {
   FACES = p.faces.map(f => ({ ...f, R: cross(f.U, f.N) }));
   // Designs on faces this box doesn't have are kept (hidden) and come back when you switch back.
   for (const s of Object.values(state)) if (s._base) { disposeBase(s._base); s._base = null; s._key = null; }
+  // A face can be much thinner on another model (e.g. 1.27 mm side plates), so lower any depth that would no longer be safe.
+  const lowered = [];
+  for (const f of FACES) {
+    const s = state[f.id]; if (!s) continue;
+    const safe = +(f.wall - 0.4).toFixed(2);
+    if (s.depth > safe) { s.depth = Math.min(f.depth, safe); lowered.push(`${f.name} to ${s.depth} mm`); }
+  }
   const stl = window.__BOXES__[p.stl];
   boxManifold = toManifold(parseSTL(b64(stl).buffer));
   boxGeo = displayGeo(boxManifold.getMesh());
@@ -1150,14 +1182,15 @@ function loadProfile(p) {
   FACES.forEach(refreshDecal);
   if (!faceById(selected)) selected = FACES[0].id;
   $('#backToEdit').hidden = true;
+  return lowered;
 }
 const profSel = $('#profile');
 profSel.innerHTML = PROFILES.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
 $('#profileRow').hidden = PROFILES.length < 2;
 profSel.onchange = () => {
   const p = PROFILES.find(x => x.id === profSel.value); if (!p || p === profile) return;
-  loadProfile(p); select(selected, false); lookAtFace(null);
-  toast(`Switched to ${p.name}.`);
+  const lowered = loadProfile(p); select(selected, false); lookAtFace(null);
+  toast(`Switched to ${p.name}.${lowered.length ? ` Lowered depth on ${lowered.join(', ')} to fit.` : ''}`);
 };
 
 /* ---------- Boot ---------- */
